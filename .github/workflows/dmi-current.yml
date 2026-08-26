@@ -1,0 +1,46 @@
+name: Fetch DMI current & water level
+ 
+# Kører automatisk hver dag kl. 05:00 UTC (07:00 dansk sommertid),
+# og kan også køres manuelt fra GitHub ("Run workflow").
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch: {}
+ 
+permissions:
+  contents: write
+ 
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+ 
+      - name: Fetch DMI ocean forecast (Amager Strand + Nordhavn/Sandkaj + Hesselbjerg)
+        run: |
+          mkdir -p data
+          START=$(date -u +%Y-%m-%dT%H:00:00Z)
+          END=$(date -u -d "+72 hours" +%Y-%m-%dT%H:00:00Z)
+ 
+          # Amager Strand (svømmerutens midtpunkt)
+          curl -sS "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            -o data/amager-current.json
+ 
+          # Nordhavnens svømmebane (Sandkaj Badezone)
+          curl -sS "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            -o data/nordhavn-current.json
+ 
+          # Hesselbjerg Strand, Langeland (kun til ad hoc-tjek)
+          curl -sS "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            -o data/hesselbjerg-current.json
+ 
+          # Skriv tidsstempel for hvornår data sidst blev hentet
+          date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
+ 
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --staged --quiet || git commit -m "Update DMI forecast data"
+          git push
