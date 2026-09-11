@@ -26,7 +26,9 @@ jobs:
           # i stedet for bare at gemme fejlsiden som om det var rigtige data.
           # --retry-all-errors får curl til at forsøge igen ved den slags fejl
           # (ikke kun ved forbindelsesfejl), med stigende ventetid mellem forsøg.
-          CURL_OPTS="--retry 6 --retry-delay 15 --retry-all-errors -f -sS"
+          # -A sætter en almindelig browser-lignende User-Agent, da nogle
+          # tjenester ellers afviser curl's standard-UA.
+          CURL_OPTS="--retry 6 --retry-delay 15 --retry-all-errors -f -sS -A Mozilla/5.0"
 
           # Henter til en midlertidig .tmp-fil og erstatter kun den rigtige fil,
           # hvis hentningen lykkedes - så en fejlet hentning aldrig overskriver
@@ -47,10 +49,16 @@ jobs:
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/amager-current.json
 
+          # Lille pause mellem kaldene, så vi ikke rammer DMI's delte
+          # fair-use-grænse ved at sende tre kald lige efter hinanden.
+          sleep 10
+
           # Nordhavnens svømmebane (Sandkaj Badezone)
           fetch_one "Nordhavn (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/nordhavn-current.json
+
+          sleep 10
 
           # Hesselbjerg Strand, Langeland (kun til ad hoc-tjek)
           fetch_one "Hesselbjerg (DMI strøm/vandstand)" \
@@ -64,8 +72,14 @@ jobs:
           # api.vandudsigten.dk er den API, som badevand.dk (DHI) selv henter data fra.
           # Den kræver ingen nøgle og returnerer ALLE danske badesteder i ét kald,
           # så vi filtrerer selv de to, vi skal bruge, ud med jq.
+          # -A: nogle tjenester (som denne) afviser forbindelser uden en
+          # almindelig browser-lignende User-Agent (vi så "Connection reset
+          # by peer" uden den - det er typisk tegn på den slags filtrering).
+          # -H Accept: beder eksplicit om JSON, ligesom en rigtig browser ville.
           set +e
           curl --retry 6 --retry-delay 15 --retry-all-errors -f -sS \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" \
+            -H "Accept: application/json" \
             "https://api.vandudsigten.dk/beaches" -o /tmp/beaches.json
           FETCH_OK=$?
           set -e
