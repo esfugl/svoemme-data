@@ -65,44 +65,43 @@ jobs:
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/hesselbjerg-current.json
 
-      - name: Fetch bathing water quality, temperature & wind (badevand.dk's underlying API)
+      - name: Fetch bathing water quality (badevand.com)
         run: |
           mkdir -p data
 
-          # api.vandudsigten.dk er den API, som badevand.dk (DHI) selv henter data fra.
-          # Den kræver ingen nøgle og returnerer ALLE danske badesteder i ét kald,
-          # så vi filtrerer selv de to, vi skal bruge, ud med jq.
-          # -A: nogle tjenester (som denne) afviser forbindelser uden en
-          # almindelig browser-lignende User-Agent (vi så "Connection reset
-          # by peer" uden den - det er typisk tegn på den slags filtrering).
-          # -H Accept: beder eksplicit om JSON, ligesom en rigtig browser ville.
-          set +e
-          curl --retry 6 --retry-delay 15 --retry-all-errors -f -sS \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" \
-            -H "Accept: application/json" \
-            "https://api.vandudsigten.dk/beaches" -o /tmp/beaches.json
-          FETCH_OK=$?
-          set -e
+          # badevand.com's badested-sider er almindelige, server-renderede
+          # HTML-sider (ikke en JS-app som badevand.dk selv) - de indeholder
+          # klassificeringssætningen direkte i HTML'en, så et almindeligt
+          # curl-kald bør kunne læse dem.
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
-          extract_beach() {
-            local label="$1" pattern="$2" outfile="$3"
-            if [ "$FETCH_OK" -ne 0 ]; then
-              echo "ADVARSEL: kunne ikke hente api.vandudsigten.dk/beaches - beholder tidligere data i $outfile" >&2
+          extract_quality() {
+            local label="$1" url="$2" outfile="$3"
+            local html sentence
+            if ! html=$(curl --retry 6 --retry-delay 15 --retry-all-errors -f -sS -A "$UA" "$url"); then
+              echo "ADVARSEL: kunne ikke hente $label ($url) - beholder tidligere data i $outfile" >&2
               return
             fi
-            local matches count
-            matches=$(jq "[.[] | select(.name | test(\"$pattern\"; \"i\"))]" /tmp/beaches.json)
-            count=$(echo "$matches" | jq 'length')
-            if [ "$count" = "1" ]; then
-              echo "$matches" | jq '.[0]' > "${outfile}.tmp" && mv "${outfile}.tmp" "$outfile"
-              echo "OK: $label (1 match: $(echo "$matches" | jq -r '.[0].name'))"
+            # Fjern HTML-tags, saml til én linje, og find sætningen med enten
+            # "badevandskvalitet" (selve klassificeringen) eller "klassificering"
+            # (dækker også "endnu ikke en offentliggjort klassificering").
+            sentence=$(echo "$html" | sed -e 's/<[^>]*>/ /g' | tr -s ' \t\n' ' ' \
+              | grep -oiE '[^.]*(badevandskvalitet|klassificering)[^.]*\.' | head -1)
+            if [ -n "$sentence" ]; then
+              printf '%s\n' "$sentence" > "${outfile}.tmp" && mv "${outfile}.tmp" "$outfile"
+              echo "OK: $label - \"$sentence\""
             else
-              echo "ADVARSEL: fandt $count match for $label (mønster: $pattern) - beholder tidligere data i $outfile. Match-navne: $(echo "$matches" | jq -r '.[].name' | tr '\n' ';')" >&2
+              echo "ADVARSEL: fandt ingen klassificeringssætning for $label på $url - beholder tidligere data i $outfile" >&2
             fi
           }
 
-          extract_beach "Amager Strandpark, Nord" "Amager Strandpark.*Nord" data/amager-badevand.json
-          extract_beach "Nordhavn Havsvømmebane" "Nordhavn.*Havsv.mmebane" data/nordhavn-badevand.json
+          extract_quality "Amager Strandpark, Øresund" \
+            "https://badevand.com/badested/amager-strandpark-oeresund/" \
+            data/amager-badevand.txt
+
+          extract_quality "Nordhavn Havsvømmebane" \
+            "https://badevand.com/badested/nordhavn-havsvoemmebane/" \
+            data/nordhavn-badevand.txt
 
           # Skriv tidsstempel for hvornår scriptet sidst KØRTE (ikke nødvendigvis
           # hvornår alle kald lykkedes - se "OK"/"ADVARSEL"-linjerne i kørslens
