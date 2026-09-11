@@ -1,4 +1,4 @@
-name: Fetch swim conditions data (DMI + badevand.dk)
+name: Fetch DMI current & water level
 
 # Kører automatisk hver dag kl. 05:00 UTC (07:00 dansk sommertid),
 # og kan også køres manuelt fra GitHub ("Run workflow").
@@ -65,47 +65,13 @@ jobs:
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/hesselbjerg-current.json
 
-      - name: Fetch bathing water quality (badevand.com)
+      - name: Write timestamp
         run: |
-          mkdir -p data
-
-          # badevand.com's badested-sider er almindelige, server-renderede
-          # HTML-sider (ikke en JS-app som badevand.dk selv) - de indeholder
-          # klassificeringssætningen direkte i HTML'en, så et almindeligt
-          # curl-kald bør kunne læse dem.
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-
-          extract_quality() {
-            local label="$1" url="$2" outfile="$3"
-            local html sentence
-            if ! html=$(curl --retry 6 --retry-delay 15 --retry-all-errors -f -sS -A "$UA" "$url"); then
-              echo "ADVARSEL: kunne ikke hente $label ($url) - beholder tidligere data i $outfile" >&2
-              return
-            fi
-            # Fjern HTML-tags, saml til én linje, og find sætningen med enten
-            # "badevandskvalitet" (selve klassificeringen) eller "klassificering"
-            # (dækker også "endnu ikke en offentliggjort klassificering").
-            sentence=$(echo "$html" | sed -e 's/<[^>]*>/ /g' | tr -s ' \t\n' ' ' \
-              | grep -oiE '[^.]*(badevandskvalitet|klassificering)[^.]*\.' | head -1)
-            if [ -n "$sentence" ]; then
-              printf '%s\n' "$sentence" > "${outfile}.tmp" && mv "${outfile}.tmp" "$outfile"
-              echo "OK: $label - \"$sentence\""
-            else
-              echo "ADVARSEL: fandt ingen klassificeringssætning for $label på $url - beholder tidligere data i $outfile" >&2
-            fi
-          }
-
-          extract_quality "Amager Strandpark, Øresund" \
-            "https://badevand.com/badested/amager-strandpark-oeresund/" \
-            data/amager-badevand.txt
-
-          extract_quality "Nordhavn Havsvømmebane" \
-            "https://badevand.com/badested/nordhavn-havsvoemmebane/" \
-            data/nordhavn-badevand.txt
-
-          # Skriv tidsstempel for hvornår scriptet sidst KØRTE (ikke nødvendigvis
-          # hvornår alle kald lykkedes - se "OK"/"ADVARSEL"-linjerne i kørslens
-          # log for detaljer pr. sted/kilde).
+          # Badevandskvalitet kunne ikke hentes pålideligt fra nogen af de
+          # forsøgte kilder (badevand.dk, vandudsigten.dk, badevand.com) -
+          # de blokerer alle tilsyneladende trafik fra cloud/datacenter-IP'er
+          # som GitHub Actions'. Det tjekkes derfor fortsat manuelt/interaktivt
+          # i stedet. Denne workflow henter kun DMI's strøm/vandstand-data.
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
 
       - name: Commit and push
