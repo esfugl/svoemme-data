@@ -22,23 +22,44 @@ jobs:
           START=$(date -u +%Y-%m-%dT%H:00:00Z)
           END=$(date -u -d "+72 hours" +%Y-%m-%dT%H:00:00Z)
 
-          # --retry-all-errors får curl til at forsøge igen ved 429 "Too Many Requests"
+          # -f gør, at curl regner en HTTP-fejl (fx 429) som en fejl i sig selv,
+          # i stedet for bare at gemme fejlsiden som om det var rigtige data.
+          # --retry-all-errors får curl til at forsøge igen ved den slags fejl
           # (ikke kun ved forbindelsesfejl), med stigende ventetid mellem forsøg.
-          CURL_OPTS="--retry 6 --retry-delay 15 --retry-all-errors -sS"
+          CURL_OPTS="--retry 6 --retry-delay 15 --retry-all-errors -f -sS"
+
+          # Henter til en midlertidig .tmp-fil og erstatter kun den rigtige fil,
+          # hvis hentningen lykkedes - så en fejlet hentning aldrig overskriver
+          # gode, tidligere data med en fejlbesked.
+          fetch_one() {
+            local label="$1" url="$2" outfile="$3"
+            if curl $CURL_OPTS "$url" -o "${outfile}.tmp"; then
+              mv "${outfile}.tmp" "$outfile"
+              echo "OK: $label"
+            else
+              echo "ADVARSEL: kunne ikke hente $label - beholder tidligere data i $outfile" >&2
+              rm -f "${outfile}.tmp"
+            fi
+          }
 
           # Amager Strand (svømmerutens midtpunkt)
-          curl $CURL_OPTS "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            -o data/amager-current.json
+          fetch_one "Amager Strand" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            data/amager-current.json
 
           # Nordhavnens svømmebane (Sandkaj Badezone)
-          curl $CURL_OPTS "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            -o data/nordhavn-current.json
+          fetch_one "Nordhavn" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            data/nordhavn-current.json
 
           # Hesselbjerg Strand, Langeland (kun til ad hoc-tjek)
-          curl $CURL_OPTS "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            -o data/hesselbjerg-current.json
+          fetch_one "Hesselbjerg" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            data/hesselbjerg-current.json
 
-          # Skriv tidsstempel for hvornår data sidst blev hentet
+          # Skriv tidsstempel for hvornår scriptet sidst KØRTE (ikke nødvendigvis
+          # hvornår alle steder lykkedes - se evt. "OK"/"ADVARSEL"-linjerne ovenfor
+          # i kørslens log for detaljer pr. sted).
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
 
       - name: Commit and push
