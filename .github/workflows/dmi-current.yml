@@ -1,4 +1,4 @@
-name: Fetch DMI current & water level
+name: Fetch swim conditions data (DMI + badevand.dk)
 
 # Kører automatisk hver dag kl. 05:00 UTC (07:00 dansk sommertid),
 # og kan også køres manuelt fra GitHub ("Run workflow").
@@ -43,23 +43,56 @@ jobs:
           }
 
           # Amager Strand (svømmerutens midtpunkt)
-          fetch_one "Amager Strand" \
+          fetch_one "Amager Strand (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/amager-current.json
 
           # Nordhavnens svømmebane (Sandkaj Badezone)
-          fetch_one "Nordhavn" \
+          fetch_one "Nordhavn (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/nordhavn-current.json
 
           # Hesselbjerg Strand, Langeland (kun til ad hoc-tjek)
-          fetch_one "Hesselbjerg" \
+          fetch_one "Hesselbjerg (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/hesselbjerg-current.json
 
+      - name: Fetch bathing water quality, temperature & wind (badevand.dk's underlying API)
+        run: |
+          mkdir -p data
+
+          # api.vandudsigten.dk er den API, som badevand.dk (DHI) selv henter data fra.
+          # Den kræver ingen nøgle og returnerer ALLE danske badesteder i ét kald,
+          # så vi filtrerer selv de to, vi skal bruge, ud med jq.
+          set +e
+          curl --retry 6 --retry-delay 15 --retry-all-errors -f -sS \
+            "https://api.vandudsigten.dk/beaches" -o /tmp/beaches.json
+          FETCH_OK=$?
+          set -e
+
+          extract_beach() {
+            local label="$1" pattern="$2" outfile="$3"
+            if [ "$FETCH_OK" -ne 0 ]; then
+              echo "ADVARSEL: kunne ikke hente api.vandudsigten.dk/beaches - beholder tidligere data i $outfile" >&2
+              return
+            fi
+            local matches count
+            matches=$(jq "[.[] | select(.name | test(\"$pattern\"; \"i\"))]" /tmp/beaches.json)
+            count=$(echo "$matches" | jq 'length')
+            if [ "$count" = "1" ]; then
+              echo "$matches" | jq '.[0]' > "${outfile}.tmp" && mv "${outfile}.tmp" "$outfile"
+              echo "OK: $label (1 match: $(echo "$matches" | jq -r '.[0].name'))"
+            else
+              echo "ADVARSEL: fandt $count match for $label (mønster: $pattern) - beholder tidligere data i $outfile. Match-navne: $(echo "$matches" | jq -r '.[].name' | tr '\n' ';')" >&2
+            fi
+          }
+
+          extract_beach "Amager Strandpark, Nord" "Amager Strandpark.*Nord" data/amager-badevand.json
+          extract_beach "Nordhavn Havsvømmebane" "Nordhavn.*Havsv.mmebane" data/nordhavn-badevand.json
+
           # Skriv tidsstempel for hvornår scriptet sidst KØRTE (ikke nødvendigvis
-          # hvornår alle steder lykkedes - se evt. "OK"/"ADVARSEL"-linjerne ovenfor
-          # i kørslens log for detaljer pr. sted).
+          # hvornår alle kald lykkedes - se "OK"/"ADVARSEL"-linjerne i kørslens
+          # log for detaljer pr. sted/kilde).
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
 
       - name: Commit and push
@@ -67,6 +100,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          git diff --staged --quiet || git commit -m "Update DMI forecast data"
+          git diff --staged --quiet || git commit -m "Update swim conditions data"
           git pull --rebase origin main
           git push
