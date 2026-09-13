@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch DMI ocean forecast (Amager Strand + Nordhavn/Sandkaj + Hesselbjerg)
+      - name: Fetch DMI ocean forecast (Amager Strand + Nordhavn/Sandkaj + Kattegatvej/Nordhavn Havsvømmebane)
         run: |
           mkdir -p data
           START=$(date -u +%Y-%m-%dT%H:00:00Z)
@@ -60,10 +60,13 @@ jobs:
 
           sleep 10
 
-          # Hesselbjerg Strand, Langeland (kun til ad hoc-tjek)
-          fetch_one "Hesselbjerg (DMI strøm/vandstand)" \
-            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(10.6549%2054.8019)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            data/hesselbjerg-current.json
+          # Nordhavnens Havsvømmebane (Kattegatvej 59) - punktet er flyttet ca.
+          # 350-400 m ud i havnemundingen fra selve adressen, fordi DMI's
+          # havmodel ikke har gyldige data helt inde ved kajkanten (testet
+          # 13/9-2026: adressens eget koordinat gav kun null-værdier).
+          fetch_one "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6150%2055.7200)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            data/kattegatvej-current.json
 
       - name: Write timestamp
         run: |
