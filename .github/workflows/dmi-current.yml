@@ -1,10 +1,18 @@
 name: Fetch DMI current & water level
 
-# Kører automatisk hver dag kl. 05:00 UTC (07:00 dansk sommertid),
+# Kører automatisk hver dag kl. 11:00 UTC (13:00 dansk sommertid / 12:00 vintertid),
 # og kan også køres manuelt fra GitHub ("Run workflow").
+#
+# Tidspunktet er flyttet fra kl. 05:00 UTC (07:00 sommertid) den 16/9-2026:
+# de sidste 5 morgenkørsler havde alle mindst ét (ofte to) af de tre DMI-kald
+# fejle, mens den eneste kørsel midt på dagen i samme periode (kl. 13:10
+# lokal) lykkedes for alle tre. Formodning: DMI's egen havmodel bliver
+# publiceret omkring den tidlige morgentime, og/eller mange andre
+# automatiske jobs rammer DMI's API på samme runde klokkeslæt. Hold øje med
+# data/fetch-status.json fremover for at se, om flytningen faktisk hjælper.
 on:
   schedule:
-    - cron: '0 5 * * *'
+    - cron: '0 11 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -30,43 +38,61 @@ jobs:
           # tjenester ellers afviser curl's standard-UA.
           CURL_OPTS="--retry 6 --retry-delay 15 --retry-all-errors -f -sS -A Mozilla/5.0"
 
+          # Samler status for hvert punkt op, så vi kan skrive en samlet
+          # data/fetch-status.json i slutningen - så det er synligt uden at
+          # skulle grave i commit-historik eller Actions-logs (som kræver
+          # login for at se i fuld længde), hvilket af de tre punkter der
+          # rent faktisk lykkedes i denne kørsel.
+          STATUS=()
+
           # Henter til en midlertidig .tmp-fil og erstatter kun den rigtige fil,
           # hvis hentningen lykkedes - så en fejlet hentning aldrig overskriver
           # gode, tidligere data med en fejlbesked.
           fetch_one() {
-            local label="$1" url="$2" outfile="$3"
+            local key="$1" label="$2" url="$3" outfile="$4"
             if curl $CURL_OPTS "$url" -o "${outfile}.tmp"; then
               mv "${outfile}.tmp" "$outfile"
               echo "OK: $label"
+              STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"ok\"}")
             else
               echo "ADVARSEL: kunne ikke hente $label - beholder tidligere data i $outfile" >&2
               rm -f "${outfile}.tmp"
+              STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"failed\"}")
             fi
           }
 
           # Amager Strand (svømmerutens midtpunkt)
-          fetch_one "Amager Strand (DMI strøm/vandstand)" \
+          fetch_one "amager" "Amager Strand (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/amager-current.json
 
-          # Lille pause mellem kaldene, så vi ikke rammer DMI's delte
-          # fair-use-grænse ved at sende tre kald lige efter hinanden.
-          sleep 10
+          # Pause mellem kaldene, så vi ikke rammer DMI's delte fair-use-grænse
+          # ved at sende tre kald lige efter hinanden. Øget fra 10 til 30
+          # sekunder (16/9-2026) i forsøg på at undgå rate-limit-relaterede
+          # udfald, som ramte 2 ud af 3 punkter i næsten alle morgenkørsler.
+          sleep 30
 
           # Nordhavnens svømmebane (Sandkaj Badezone)
-          fetch_one "Nordhavn (DMI strøm/vandstand)" \
+          fetch_one "nordhavn" "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/nordhavn-current.json
 
-          sleep 10
+          sleep 30
 
           # Nordhavnens Havsvømmebane (Kattegatvej 59) - punktet er flyttet ca.
           # 350-400 m ud i havnemundingen fra selve adressen, fordi DMI's
           # havmodel ikke har gyldige data helt inde ved kajkanten (testet
           # 13/9-2026: adressens eget koordinat gav kun null-værdier).
-          fetch_one "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)" \
+          fetch_one "kattegatvej" "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6150%2055.7200)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/kattegatvej-current.json
+
+          # Skriver samlet status for denne kørsel - ét blik afslører, om et
+          # eller flere punkter fejlede, uden at skulle sammenligne datofiler
+          # eller læse Actions-logs.
+          printf '%s\n' "${STATUS[@]}" | jq -s --arg run_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{run_at: $run_at, points: (map({(.key): {label: .label, status: .status}}) | add)}' \
+            > data/fetch-status.json
 
       - name: Write timestamp
         run: |
@@ -75,6 +101,11 @@ jobs:
           # de blokerer alle tilsyneladende trafik fra cloud/datacenter-IP'er
           # som GitHub Actions'. Det tjekkes derfor fortsat manuelt/interaktivt
           # i stedet. Denne workflow henter kun DMI's strøm/vandstand-data.
+          #
+          # NB: dette tidsstempel opdateres altid, uanset om et eller flere
+          # af de tre DMI-kald ovenfor fejlede - det viser kun, at workflowet
+          # kørte, ikke at alle punkters data er friske. Brug
+          # data/fetch-status.json for status pr. punkt.
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
 
       - name: Commit and push
