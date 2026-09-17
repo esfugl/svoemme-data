@@ -10,6 +10,14 @@ name: Fetch DMI current & water level
 # publiceret omkring den tidlige morgentime, og/eller mange andre
 # automatiske jobs rammer DMI's API på samme runde klokkeslæt. Hold øje med
 # data/fetch-status.json fremover for at se, om flytningen faktisk hjælper.
+#
+# Udvidet 17/9-2026 med to nye kald til DMI's "Oceanographic Observation and
+# Tidewater API" (v2/oceanObs), der giver live vandtemperatur fra rigtige
+# målestationer - som supplement til strøm/vandstand-prognosen fra
+# forecastedr-modellen ovenfor. Denne API kræver (siden DMI fjernede krav om
+# API-nøgle 2/12-2025) ingen nøgle overhovedet. Testet manuelt 17/9-2026:
+# station 30333 (Kastrup Havn II) og 30334 (Københavns Havn II) leverer
+# begge friske målinger med ca. 10 minutters mellemrum.
 on:
   schedule:
     - cron: '0 11 * * *'
@@ -41,8 +49,8 @@ jobs:
           # Samler status for hvert punkt op, så vi kan skrive en samlet
           # data/fetch-status.json i slutningen - så det er synligt uden at
           # skulle grave i commit-historik eller Actions-logs (som kræver
-          # login for at se i fuld længde), hvilket af de tre punkter der
-          # rent faktisk lykkedes i denne kørsel.
+          # login for at se i fuld længde), hvilket af punkterne der rent
+          # faktisk lykkedes i denne kørsel.
           STATUS=()
 
           # Henter til en midlertidig .tmp-fil og erstatter kun den rigtige fil,
@@ -67,7 +75,7 @@ jobs:
             data/amager-current.json
 
           # Pause mellem kaldene, så vi ikke rammer DMI's delte fair-use-grænse
-          # ved at sende tre kald lige efter hinanden. Øget fra 10 til 30
+          # ved at sende kaldene lige efter hinanden. Øget fra 10 til 30
           # sekunder (16/9-2026) i forsøg på at undgå rate-limit-relaterede
           # udfald, som ramte 2 ud af 3 punkter i næsten alle morgenkørsler.
           sleep 30
@@ -87,6 +95,25 @@ jobs:
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6150%2055.7200)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/kattegatvej-current.json
 
+          sleep 30
+
+          # Live vandtemperatur fra DMI's oceanObs-API (rigtige målestationer,
+          # ikke en model) - ingen API-nøgle nødvendig. "period=latest" giver
+          # præcis én, den nyeste, måling. Kastrup Havn II (station 30333)
+          # dækker Amager Strand; Københavns Havn II (station 30334) dækker
+          # både Nordhavn/Sandkaj Badezone og Kattegatvej/Nordhavn
+          # Havsvømmebane (samme station brugt til alle tre, ligesom den
+          # manuelle dmi.dk/havtemperatur-opslag hidtil har gjort).
+          fetch_one "amager_watertemp" "Amager Strand (live vandtemp, Kastrup Havn II)" \
+            "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30333&parameterId=tw&period=latest" \
+            data/amager-watertemp.json
+
+          sleep 15
+
+          fetch_one "nordhavn_watertemp" "Nordhavn/Sandkaj/Kattegatvej (live vandtemp, Københavns Havn II)" \
+            "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30334&parameterId=tw&period=latest" \
+            data/nordhavn-watertemp.json
+
           # Skriver samlet status for denne kørsel - ét blik afslører, om et
           # eller flere punkter fejlede, uden at skulle sammenligne datofiler
           # eller læse Actions-logs.
@@ -100,10 +127,11 @@ jobs:
           # forsøgte kilder (badevand.dk, vandudsigten.dk, badevand.com) -
           # de blokerer alle tilsyneladende trafik fra cloud/datacenter-IP'er
           # som GitHub Actions'. Det tjekkes derfor fortsat manuelt/interaktivt
-          # i stedet. Denne workflow henter kun DMI's strøm/vandstand-data.
+          # i stedet. Denne workflow henter kun DMI's strøm/vandstand-data og
+          # (siden 17/9-2026) live vandtemperatur.
           #
           # NB: dette tidsstempel opdateres altid, uanset om et eller flere
-          # af de tre DMI-kald ovenfor fejlede - det viser kun, at workflowet
+          # af DMI-kaldene ovenfor fejlede - det viser kun, at workflowet
           # kørte, ikke at alle punkters data er friske. Brug
           # data/fetch-status.json for status pr. punkt.
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
