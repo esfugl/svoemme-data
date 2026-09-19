@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-09-19T11:08:59Z",
+  "run_at": "2026-09-19T11:52:40Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
@@ -7,10 +7,14 @@
     },
     "nordhavn": {
       "label": "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)",
-      "status": "failed"
+      "status": "ok"
     },
     "kattegatvej": {
       "label": "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)",
+      "status": "ok"
+    },
+    "valkyrien": {
+      "label": "Valkyrien/Køge (DMI strøm/vandstand)",
       "status": "ok"
     },
     "amager_watertemp": {
@@ -19,6 +23,10 @@
     },
     "nordhavn_watertemp": {
       "label": "Nordhavn/Sandkaj/Kattegatvej (live vandtemp, Københavns Havn II)",
+      "status": "ok"
+    },
+    "valkyrien_watertemp": {
+      "label": "Valkyrien/Køge (live vandtemp, Køge Havn II)",
       "status": "ok"
     }
   }
