@@ -1,15 +1,14 @@
 name: Fetch DMI current & water level
 
-# Kører automatisk hver dag kl. 11:00 UTC (13:00 dansk sommertid / 12:00 vintertid),
-# og kan også køres manuelt fra GitHub ("Run workflow").
+# Kørte oprindeligt én gang dagligt kl. 11:00 UTC (13:00 dansk sommertid /
+# 12:00 vintertid), og kan også køres manuelt fra GitHub ("Run workflow").
 #
-# Tidspunktet er flyttet fra kl. 05:00 UTC (07:00 sommertid) den 16/9-2026:
+# Tidspunktet blev flyttet fra kl. 05:00 UTC (07:00 sommertid) den 16/9-2026:
 # de sidste 5 morgenkørsler havde alle mindst ét (ofte to) af de tre DMI-kald
 # fejle, mens den eneste kørsel midt på dagen i samme periode (kl. 13:10
 # lokal) lykkedes for alle tre. Formodning: DMI's egen havmodel bliver
 # publiceret omkring den tidlige morgentime, og/eller mange andre
-# automatiske jobs rammer DMI's API på samme runde klokkeslæt. Hold øje med
-# data/fetch-status.json fremover for at se, om flytningen faktisk hjælper.
+# automatiske jobs rammer DMI's API på samme runde klokkeslæt.
 #
 # Udvidet 17/9-2026 med to nye kald til DMI's "Oceanographic Observation and
 # Tidewater API" (v2/oceanObs), der giver live vandtemperatur fra rigtige
@@ -18,9 +17,37 @@ name: Fetch DMI current & water level
 # API-nøgle 2/12-2025) ingen nøgle overhovedet. Testet manuelt 17/9-2026:
 # station 30333 (Kastrup Havn II) og 30334 (Københavns Havn II) leverer
 # begge friske målinger med ca. 10 minutters mellemrum.
+#
+# Udvidet igen 19/9-2026 med to punkter for Valkyrien, en vinterbadeforening
+# i Køge (Søndre Molevej 30, 4600 Køge = 55.4529533°N 12.2002726°E) - en ny
+# lokation ud over de tre københavnske. Testet manuelt 19/9-2026:
+# forecastedr-modellen har gyldige (ikke-null) data direkte på koordinaten,
+# ingen justering nødvendig (i modsætning til Kattegatvej). Live vandtemp
+# kommer fra DMI's oceanObs-station "Køge Havn II" (30479) - søsterstationen
+# "Køge Havn I" (30478) er testet og bekræftet død (returnerer kun en
+# måling fra 2020), så den bruges ikke.
+#
+# Skema ændret igen 19/9-2026, to ting på én gang:
+# 1) To kørsler dagligt i stedet for én, som redundans. fetch_one() gemmer
+#    kun nye data ved succes (se logikken nedenfor), så en ekstra kørsel er
+#    risikofri og øger blot chancen for, at alle punkter får friske data
+#    mindst én gang i døgnet. NB: data/fetch-status.json bliver overskrevet
+#    ved hver kørsel, så den viser altid kun den SENESTE af dagens to
+#    kørsler, ikke en samlet status for begge.
+# 2) Begge tidspunkter er bevidst IKKE runde klokkeslæt/minuttal. Baggrund:
+#    GitHub's egen dokumentation for schedule-events advarer direkte om, at
+#    "your scheduled workflow may experience delays. High load can occur
+#    when many GitHub Actions workflows are set to run at the same time of
+#    day" - og runde klokkeslæt (især :00) er formodentlig det mest
+#    almindelige valg for andre cron-jobs, både i GitHub Actions selv og
+#    hos andre automatiserede klienter, der rammer DMI's API. Det er samme
+#    jitter-logik, som allerede bruges mellem de enkelte DMI-kald nedenfor,
+#    nu udvidet til selve kørselstidspunkterne. Ikke testet endnu om det
+#    gør en reel forskel - hold øje med data/fetch-status.json fremover.
 on:
   schedule:
-    - cron: '0 11 * * *'
+    - cron: '47 10 * * *'  # ca. kl. 12:47 dansk sommertid / 11:47 vintertid
+    - cron: '13 16 * * *'  # ca. kl. 18:13 dansk sommertid / 17:13 vintertid
   workflow_dispatch: {}
 
 permissions:
@@ -32,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch DMI ocean forecast (Amager Strand + Nordhavn/Sandkaj + Kattegatvej/Nordhavn Havsvømmebane)
+      - name: Fetch DMI ocean forecast (Amager Strand + Nordhavn/Sandkaj + Kattegatvej/Nordhavn Havsvømmebane + Valkyrien/Køge)
         run: |
           mkdir -p data
           START=$(date -u +%Y-%m-%dT%H:00:00Z)
@@ -65,7 +92,7 @@ jobs:
           STATUS=()
 
           # Tilfældig ventetid i intervallet [min,max] sekunder (inklusive).
-          # Bruges både mellem retry-forsøg på samme kald og mellem de 5
+          # Bruges både mellem retry-forsøg på samme kald og mellem de
           # forskellige kald, så vi ikke rammer DMI med et helt forudsigeligt,
           # metronom-agtigt mønster hver dag på præcis samme sekund-afstande -
           # hvis den observerede 429-throttling (se dmi-pi-automation-noterne)
@@ -134,13 +161,25 @@ jobs:
 
           random_pause 20 40
 
+          # Valkyrien (vinterbadeforening, Søndre Molevej 30, 4600 Køge) -
+          # koordinatet er klubbens egen adresse på Køge Havns søndre mole;
+          # DMI's havmodel har gyldige data direkte her, ingen justering
+          # nødvendig (testet 19/9-2026).
+          fetch_one "valkyrien" "Valkyrien/Køge (DMI strøm/vandstand)" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.2002726%2055.4529533)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            data/valkyrien-current.json
+
+          random_pause 20 40
+
           # Live vandtemperatur fra DMI's oceanObs-API (rigtige målestationer,
           # ikke en model) - ingen API-nøgle nødvendig. "period=latest" giver
           # præcis én, den nyeste, måling. Kastrup Havn II (station 30333)
           # dækker Amager Strand; Københavns Havn II (station 30334) dækker
           # både Nordhavn/Sandkaj Badezone og Kattegatvej/Nordhavn
           # Havsvømmebane (samme station brugt til alle tre, ligesom den
-          # manuelle dmi.dk/havtemperatur-opslag hidtil har gjort).
+          # manuelle dmi.dk/havtemperatur-opslag hidtil har gjort). Køge Havn
+          # II (station 30479) dækker Valkyrien - søsterstationen Køge Havn I
+          # (30478) er bekræftet død (kun en måling fra 2020), bruges ikke.
           fetch_one "amager_watertemp" "Amager Strand (live vandtemp, Kastrup Havn II)" \
             "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30333&parameterId=tw&period=latest" \
             data/amager-watertemp.json
@@ -150,6 +189,12 @@ jobs:
           fetch_one "nordhavn_watertemp" "Nordhavn/Sandkaj/Kattegatvej (live vandtemp, Københavns Havn II)" \
             "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30334&parameterId=tw&period=latest" \
             data/nordhavn-watertemp.json
+
+          random_pause 10 20
+
+          fetch_one "valkyrien_watertemp" "Valkyrien/Køge (live vandtemp, Køge Havn II)" \
+            "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30479&parameterId=tw&period=latest" \
+            data/valkyrien-watertemp.json
 
           # Skriver samlet status for denne kørsel - ét blik afslører, om et
           # eller flere punkter fejlede, uden at skulle sammenligne datofiler
