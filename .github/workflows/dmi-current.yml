@@ -40,11 +40,22 @@ jobs:
 
           # -f gør, at curl regner en HTTP-fejl (fx 429) som en fejl i sig selv,
           # i stedet for bare at gemme fejlsiden som om det var rigtige data.
-          # --retry-all-errors får curl til at forsøge igen ved den slags fejl
-          # (ikke kun ved forbindelsesfejl), med stigende ventetid mellem forsøg.
           # -A sætter en almindelig browser-lignende User-Agent, da nogle
           # tjenester ellers afviser curl's standard-UA.
-          CURL_OPTS="--retry 6 --retry-delay 15 --retry-all-errors -f -sS -A Mozilla/5.0"
+          # --connect-timeout 10 sætter et loft på 10 sekunder for selve det at
+          # oprette forbindelsen; --max-time 30 sætter et loft på 30 sekunder
+          # for HELE kaldet (DNS+forbindelse+svar). Tilføjet 19/9-2026, fordi
+          # der ellers ikke var noget loft: hvis DMI tog imod forbindelsen men
+          # aldrig svarede, kunne ét enkelt forsøg i praksis hænge langt ud
+          # over de bevidste random_pause-ventetider nedenfor.
+          #
+          # Retry-logikken er (19/9-2026) flyttet fra curl's indbyggede
+          # --retry/--retry-delay (som kun tillader ÉN fast ventetid mellem
+          # forsøg) til en håndskrevet løkke nedenfor, så ventetiden mellem
+          # forsøg kan gøres tilfældig i stedet for helt periodisk - se
+          # begrundelsen ved random_pause/fetch_one nedenfor.
+          CURL_OPTS="-f -sS -A Mozilla/5.0 --connect-timeout 10 --max-time 30"
+          MAX_ATTEMPTS=6
 
           # Samler status for hvert punkt op, så vi kan skrive en samlet
           # data/fetch-status.json i slutningen - så det er synligt uden at
@@ -53,20 +64,44 @@ jobs:
           # faktisk lykkedes i denne kørsel.
           STATUS=()
 
+          # Tilfældig ventetid i intervallet [min,max] sekunder (inklusive).
+          # Bruges både mellem retry-forsøg på samme kald og mellem de 5
+          # forskellige kald, så vi ikke rammer DMI med et helt forudsigeligt,
+          # metronom-agtigt mønster hver dag på præcis samme sekund-afstande -
+          # hvis den observerede 429-throttling (se dmi-pi-automation-noterne)
+          # hænger sammen med andre automatiske jobs, der selv kører i et
+          # fast mønster, mindsker jitter chancen for at vi konsekvent rammer
+          # samme smalle congestion-vindue hver dag.
+          random_pause() {
+            local min="$1" max="$2" d
+            d=$(( (RANDOM % (max - min + 1)) + min ))
+            echo "Venter ${d}s..."
+            sleep "$d"
+          }
+
           # Henter til en midlertidig .tmp-fil og erstatter kun den rigtige fil,
           # hvis hentningen lykkedes - så en fejlet hentning aldrig overskriver
-          # gode, tidligere data med en fejlbesked.
+          # gode, tidligere data med en fejlbesked. Prøver op til MAX_ATTEMPTS
+          # gange med en tilfældig pause (5-25s) mellem forsøg ved fejl.
           fetch_one() {
             local key="$1" label="$2" url="$3" outfile="$4"
-            if curl $CURL_OPTS "$url" -o "${outfile}.tmp"; then
-              mv "${outfile}.tmp" "$outfile"
-              echo "OK: $label"
-              STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"ok\"}")
-            else
-              echo "ADVARSEL: kunne ikke hente $label - beholder tidligere data i $outfile" >&2
+            local attempt=1
+            while (( attempt <= MAX_ATTEMPTS )); do
+              if curl $CURL_OPTS "$url" -o "${outfile}.tmp"; then
+                mv "${outfile}.tmp" "$outfile"
+                echo "OK: $label (forsøg $attempt/$MAX_ATTEMPTS)"
+                STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"ok\"}")
+                return
+              fi
               rm -f "${outfile}.tmp"
-              STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"failed\"}")
-            fi
+              if (( attempt < MAX_ATTEMPTS )); then
+                echo "Forsøg $attempt/$MAX_ATTEMPTS fejlede for $label - venter og prøver igen" >&2
+                random_pause 5 25
+              fi
+              (( attempt++ ))
+            done
+            echo "ADVARSEL: kunne ikke hente $label efter $MAX_ATTEMPTS forsøg - beholder tidligere data i $outfile" >&2
+            STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"failed\"}")
           }
 
           # Amager Strand (svømmerutens midtpunkt)
@@ -76,16 +111,18 @@ jobs:
 
           # Pause mellem kaldene, så vi ikke rammer DMI's delte fair-use-grænse
           # ved at sende kaldene lige efter hinanden. Øget fra 10 til 30
-          # sekunder (16/9-2026) i forsøg på at undgå rate-limit-relaterede
-          # udfald, som ramte 2 ud af 3 punkter i næsten alle morgenkørsler.
-          sleep 30
+          # sekunder (16/9-2026), og fra fast 30s til tilfældig 20-40s
+          # (19/9-2026, se random_pause ovenfor) i forsøg på at undgå
+          # rate-limit-relaterede udfald, som ramte 2 ud af 3 punkter i næsten
+          # alle morgenkørsler.
+          random_pause 20 40
 
           # Nordhavnens svømmebane (Sandkaj Badezone)
           fetch_one "nordhavn" "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)" \
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/nordhavn-current.json
 
-          sleep 30
+          random_pause 20 40
 
           # Nordhavnens Havsvømmebane (Kattegatvej 59) - punktet er flyttet ca.
           # 350-400 m ud i havnemundingen fra selve adressen, fordi DMI's
@@ -95,7 +132,7 @@ jobs:
             "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6150%2055.7200)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/kattegatvej-current.json
 
-          sleep 30
+          random_pause 20 40
 
           # Live vandtemperatur fra DMI's oceanObs-API (rigtige målestationer,
           # ikke en model) - ingen API-nøgle nødvendig. "period=latest" giver
@@ -108,7 +145,7 @@ jobs:
             "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30333&parameterId=tw&period=latest" \
             data/amager-watertemp.json
 
-          sleep 15
+          random_pause 10 20
 
           fetch_one "nordhavn_watertemp" "Nordhavn/Sandkaj/Kattegatvej (live vandtemp, Københavns Havn II)" \
             "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30334&parameterId=tw&period=latest" \
