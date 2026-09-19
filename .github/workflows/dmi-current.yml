@@ -19,13 +19,20 @@ name: Fetch DMI current & water level
 # begge friske målinger med ca. 10 minutters mellemrum.
 #
 # Udvidet igen 19/9-2026 med to punkter for Valkyrien, en vinterbadeforening
-# i Køge (Søndre Molevej 30, 4600 Køge = 55.4529533°N 12.2002726°E) - en ny
-# lokation ud over de tre københavnske. Testet manuelt 19/9-2026:
-# forecastedr-modellen har gyldige (ikke-null) data direkte på koordinaten,
-# ingen justering nødvendig (i modsætning til Kattegatvej). Live vandtemp
-# kommer fra DMI's oceanObs-station "Køge Havn II" (30479) - søsterstationen
+# i Køge - en ny lokation ud over de tre københavnske. Live vandtemp kommer
+# fra DMI's oceanObs-station "Køge Havn II" (30479) - søsterstationen
 # "Køge Havn I" (30478) er testet og bekræftet død (returnerer kun en
 # måling fra 2020), så den bruges ikke.
+#
+# Koordinatet for strøm/vandstand rettet samme dag (19/9-2026): oprindeligt
+# sat til Valkyriens klubhus/mole (Søndre Molevej 30, 55.4529533N
+# 12.2002726E), men Esben præciserede at selve vandgangen sker fra en
+# badebro ca. 400 m derfra (55.4493889N 12.1992778E - 55d26m57.8sN
+# 12d11m57.4sE), med en anden kystorientering (molen vender mod syd,
+# badebroen ud mod øst - relevant for brandmænd-vurderingen, se
+# dmi-pi-automation-hukommelsen). Testet manuelt 19/9-2026: forecastedr-
+# modellen har gyldige (ikke-null) data direkte på badebroens koordinat,
+# ingen justering nødvendig.
 #
 # Skema ændret igen 19/9-2026, to ting på én gang:
 # 1) To kørsler dagligt i stedet for én, som redundans. fetch_one() gemmer
@@ -161,12 +168,13 @@ jobs:
 
           random_pause 20 40
 
-          # Valkyrien (vinterbadeforening, Søndre Molevej 30, 4600 Køge) -
-          # koordinatet er klubbens egen adresse på Køge Havns søndre mole;
+          # Valkyrien (vinterbadeforening i Køge) - koordinatet er badebroen,
+          # hvor der faktisk gås i vand (55.4493889N 12.1992778E), ikke
+          # klubhuset/molen (rettet 19/9-2026, se kommentar øverst i filen).
           # DMI's havmodel har gyldige data direkte her, ingen justering
           # nødvendig (testet 19/9-2026).
           fetch_one "valkyrien" "Valkyrien/Køge (DMI strøm/vandstand)" \
-            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.2002726%2055.4529533)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.1992778%2055.4493889)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
             data/valkyrien-current.json
 
           random_pause 20 40
