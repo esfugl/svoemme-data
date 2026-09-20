@@ -1,9 +1,9 @@
 {
-  "run_at": "2026-09-19T16:25:52Z",
+  "run_at": "2026-09-20T10:55:36Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
-      "status": "ok"
+      "status": "failed"
     },
     "nordhavn": {
       "label": "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)",
