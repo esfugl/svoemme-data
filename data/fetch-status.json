@@ -1,9 +1,9 @@
 {
-  "run_at": "2026-09-20T16:27:28Z",
+  "run_at": "2026-09-20T17:42:44Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
-      "status": "failed"
+      "status": "ok"
     },
     "nordhavn": {
       "label": "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)",
@@ -15,7 +15,7 @@
     },
     "valkyrien": {
       "label": "Valkyrien/Køge (DMI strøm/vandstand)",
-      "status": "failed"
+      "status": "ok"
     },
     "amager_watertemp": {
       "label": "Amager Strand (live vandtemp, Kastrup Havn II)",
