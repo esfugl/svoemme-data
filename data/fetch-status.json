@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-09-21T08:50:40Z",
+  "run_at": "2026-09-21T10:57:37Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
@@ -7,7 +7,7 @@
     },
     "nordhavn": {
       "label": "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)",
-      "status": "failed"
+      "status": "ok"
     },
     "kattegatvej": {
       "label": "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)",
