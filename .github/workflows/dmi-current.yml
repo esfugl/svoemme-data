@@ -36,21 +36,46 @@ name: Fetch DMI current & water level
 #
 # Skema ændret igen 19/9-2026, to ting på én gang:
 # 1) To kørsler dagligt i stedet for én, som redundans. fetch_one() gemmer
-#    kun nye data ved succes (se logikken nedenfor), så en ekstra kørsel er
-#    risikofri og øger blot chancen for, at alle punkter får friske data
-#    mindst én gang i døgnet. NB: data/fetch-status.json bliver overskrevet
-#    ved hver kørsel, så den viser altid kun den SENESTE af dagens to
-#    kørsler, ikke en samlet status for begge.
+# kun nye data ved succes (se logikken nedenfor), så en ekstra kørsel er
+# risikofri og øger blot chancen for, at alle punkter får friske data
+# mindst én gang i døgnet. NB: data/fetch-status.json bliver overskrevet
+# ved hver kørsel, så den viser altid kun den SENESTE af dagens to
+# kørsler, ikke en samlet status for begge.
 # 2) Begge tidspunkter er bevidst IKKE runde klokkeslæt/minuttal. Baggrund:
-#    GitHub's egen dokumentation for schedule-events advarer direkte om, at
-#    "your scheduled workflow may experience delays. High load can occur
-#    when many GitHub Actions workflows are set to run at the same time of
-#    day" - og runde klokkeslæt (især :00) er formodentlig det mest
-#    almindelige valg for andre cron-jobs, både i GitHub Actions selv og
-#    hos andre automatiserede klienter, der rammer DMI's API. Det er samme
-#    jitter-logik, som allerede bruges mellem de enkelte DMI-kald nedenfor,
-#    nu udvidet til selve kørselstidspunkterne. Ikke testet endnu om det
-#    gør en reel forskel - hold øje med data/fetch-status.json fremover.
+# GitHub's egen dokumentation for schedule-events advarer direkte om, at
+# "your scheduled workflow may experience delays. High load can occur
+# when many GitHub Actions workflows are set to run at the same time of
+# day" - og runde klokkeslæt (især :00) er formodentlig det mest
+# almindelige valg for andre cron-jobs, både i GitHub Actions selv og
+# hos andre automatiserede klienter, der rammer DMI's API. Det er samme
+# jitter-logik, som allerede bruges mellem de enkelte DMI-kald nedenfor,
+# nu udvidet til selve kørselstidspunkterne. Ikke testet endnu om det
+# gør en reel forskel - hold øje med data/fetch-status.json fremover.
+#
+# Prognosevinduet for strøm/vandstand-kaldene (forecastedr/dkss_idw)
+# reduceret fra 72 til 36 timer den 23/9-2026. Baggrund: de faste
+# tilbagevendende rapporter (Amager + Valkyrien torsdag/fredag) kigger
+# reelt aldrig mere end ca. 15 timer frem (den længste er Valkyrien
+# fredag: 18:00 -> lørdag 09:00), så 72 timer var langt mere end der
+# reelt bruges. Et forecastedr-kald med 3 parametre over et 72-timers
+# vindue viste sig (testet 22-23/9-2026) at returnere 73 tidssteg
+# (0-72t inklusive) x 3 parametre = 219 datapunkter i et ca. 17 KB svar,
+# og kræver at DMI's IDW-model spatialt interpolerer for hvert tidsskridt
+# på et vilkårligt koordinat - en tung forespørgsel, som er den bedst
+# underbyggede forklaring på, hvorfor netop disse fire kald (i
+# modsætning til de tre vandtemp-kald, der har 100% succesrate) rammer
+# DMI's throttling. Et tilsvarende 36-timers kald blev testet live
+# 23/9-2026 og gav 37 tidssteg/~8,7 KB - stort set en halvering, som
+# forventet, uden at ændre antallet af HTTP-kald. NB: dette 36-timers
+# vindue gælder KUN denne pipelines egen cache (data/*-current.json),
+# som de faste triggers læser for at kunne virke uden Esbens computer
+# online - det begrænser IKKE ad hoc-forespørgsler i Cowork-chatten,
+# som altid laver deres eget friske DMI-kald med det vindue, det
+# konkrete spørgsmål kræver. Se dmi-pi-automation-hukommelsen ("In-
+# progress: optimizing DMI call weight") for hele baggrunden, inkl. det
+# konkrete regnestykke der viste at et 36-timers CACHE-vindue ville være
+# utilstrækkeligt til en ad hoc-forespørgsel om en svømmetur flere dage
+# ude i fremtiden.
 on:
   schedule:
     - cron: '47 10 * * *'  # ca. kl. 12:47 dansk sommertid / 11:47 vintertid
@@ -70,7 +95,7 @@ jobs:
         run: |
           mkdir -p data
           START=$(date -u +%Y-%m-%dT%H:00:00Z)
-          END=$(date -u -d "+72 hours" +%Y-%m-%dT%H:00:00Z)
+          END=$(date -u -d "+36 hours" +%Y-%m-%dT%H:00:00Z)
 
           # -f gør, at curl regner en HTTP-fejl (fx 429) som en fejl i sig selv,
           # i stedet for bare at gemme fejlsiden som om det var rigtige data.
