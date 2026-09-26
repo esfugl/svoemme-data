@@ -4,7 +4,7 @@ name: ditbadevand snapshot
 # badevand.dk-flag vs. ditbadevand.dk-risiko. Kan slås fra efter studiet.
 on:
   schedule:
-    - cron: '23 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
