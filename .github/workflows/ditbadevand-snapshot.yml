@@ -1,0 +1,42 @@
+name: ditbadevand snapshot
+
+# Hver time (minut 23, væk fra dmi-current.yml's :47/:13) - til korrelationsstudiet
+# badevand.dk-flag vs. ditbadevand.dk-risiko. Kan slås fra efter studiet.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-data-push
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Hent øjebliksbillede
+        run: python scripts/ditbadevand_snapshot.py
+
+      - name: Commit og push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/ditbadevand/
+          if git diff --cached --quiet; then echo "Intet nyt"; exit 0; fi
+          git commit -m "ditbadevand snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3 4; do
+            git pull --rebase --autostash origin main && git push origin HEAD:main && exit 0
+            sleep $((RANDOM % 20 + 10))
+          done
+          echo "Push fejlede efter 4 forsøg"; exit 1
