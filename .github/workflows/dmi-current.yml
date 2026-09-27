@@ -76,14 +76,37 @@ name: Fetch DMI current & water level
 # konkrete regnestykke der viste at et 36-timers CACHE-vindue ville være
 # utilstrækkeligt til en ad hoc-forespørgsel om en svømmetur flere dage
 # ude i fremtiden.
+# Navn i Actions-listen (27/9-2026): viser hvem der startede kørslen.
+# cron-job.org sender inputs.source med (fx "cron-job.org DMI middag");
+# GitHubs egen tidsplan vises som "GitHub-tidsplan (reserve)"; et klik på
+# "Run workflow" uden andet vises som "manuel".
+run-name: "${{ github.event_name == 'schedule' && 'DMI - GitHub-tidsplan (reserve)' || format('DMI - {0}', inputs.source || 'manuel') }}"
+
 on:
+  # Siden 27/9-2026 startes kørslerne primært af cron-job.org via
+  # workflow_dispatch (12:47 og 18:13 dansk tid, følger selv vintertid).
+  # GitHubs egen tidsplan herunder er kun reserve, fordi den er blevet
+  # upålidelig (kørsler timer for sent eller slet ikke).
   schedule:
     - cron: '47 10 * * *'  # ca. kl. 12:47 dansk sommertid / 11:47 vintertid
     - cron: '13 16 * * *'  # ca. kl. 18:13 dansk sommertid / 17:13 vintertid
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Hvem starter kørslen (vises i Actions-listen)'
+        required: false
+        default: 'manuel'
+        type: string
 
 permissions:
   contents: write
+
+# Højst én DMI-kørsel ad gangen (27/9-2026). Kørsel #68 og #69 kørte
+# samtidig og #69 fejlede både på DMI-kald og commit. Kommer der en ny
+# kørsel, mens en anden kører, venter den i kø i stedet for at starte.
+concurrency:
+  group: dmi-current
+  cancel-in-progress: false
 
 jobs:
   fetch:
@@ -251,11 +274,22 @@ jobs:
           # data/fetch-status.json for status pr. punkt.
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
 
-      - name: Commit and push
-        run: |
+            - name: Commit and push
+              run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
+          git diff --staged --quiet || git commit -m "Update swim conditions data"
+          # Op til 4 forsøg (27/9-2026): ditbadevand-workflowet skriver til
+          # samme repo hver time, så et push kan blive afvist, hvis det
+          # når at committe først. Hent i så fald de nye ændringer og prøv igen.
+          for i in 1 2 3 4; do
+            git pull --rebase origin main && git push && exit 0
+            echo "Push-forsøg $i fejlede - prøver igen"
+            sleep $((RANDOM % 20 + 10))
+          done
+          echo "Push fejlede efter 4 forsøg"
+          exit 1
           git diff --staged --quiet || git commit -m "Update swim conditions data"
           git pull --rebase origin main
           git push
