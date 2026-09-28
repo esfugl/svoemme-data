@@ -1,0 +1,97 @@
+name: DMI Amager - test af opdelte kald (manuel)
+
+# Kontrolleret test, foreslået af Esben 28/9-2026, af om DMI's throttling
+# hænger sammen med kald-VÆGTEN (ét tungt kald med 3 parametre over et
+# tidsvindue, som DMI's IDW-model skal spatially interpolere for hvert
+# tidsskridt) snarere end antallet af kald. Den almindelige pipeline
+# (dmi-current.yml) henter Amager Strands strøm/vandstand med ÉT kald:
+# parameter-name=current-1m-u,current-1m-v,sea-mean-deviation over 36 timer.
+# Denne testworkflow henter i stedet de samme tre parametre som TRE
+# separate, lettere kald (ét parameter hver), over et kortere 24-timers
+# vindue - kun for Amager Strand (det punkt der fejler mest, se
+# dmi-pi-automation-hukommelsen "DMI reliability"), og KUN til
+# manuel afprøvning, ingen fast tidsplan.
+#
+# Vigtigt om selve testen: for at sammenligningen skal give mening, bør
+# resultaterne helst ses i sammenhæng med, hvor belastet DMI's API var på
+# det tidspunkt kørslen fandt sted (jf. den store dag-til-dag-udsving vi
+# allerede har set i den almindelige pipeline) - en enkelt kørsel her kan
+# ikke stå alene, det kræver flere kørsler over tid, gerne spredt over
+# både formiddags- og aftenvinduet, for at være sammenlignelig med
+# baseline-tallene i svoemme_koersler-regnearket.
+#
+# Skriver IKKE til repo'ets data/-mappe og laver ingen commit - resultatet
+# er udelukkende denne kørsels egen log (samme log-format som
+# dmi-current.yml: "Forsøg N/6 fejlede for X", "OK: X (forsøg N/6)",
+# "ADVARSEL: kunne ikke hente X efter 6 forsøg" - så det kan parses med
+# samme metode/scripts som den øvrige kørselsdata-analyse).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  split-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Amager Strand strøm/vandstand som 3 separate kald (24t vindue)
+        run: |
+          mkdir -p /tmp/amager-split-test
+          START=$(date -u +%Y-%m-%dT%H:00:00Z)
+          END=$(date -u -d "+24 hours" +%Y-%m-%dT%H:00:00Z)
+
+          # Samme curl-indstillinger og retry-logik som dmi-current.yml, uændret,
+          # så en eventuel forskel i succesrate kan tilskrives selve
+          # kald-opdelingen (variablen vi tester) og ikke en anden ændring i,
+          # hvordan der ellers rammes/genforsøges.
+          CURL_OPTS="-f -sS -A Mozilla/5.0 --connect-timeout 10 --max-time 30"
+          MAX_ATTEMPTS=6
+
+          random_pause() {
+            local min="$1" max="$2" d
+            d=$(( (RANDOM % (max - min + 1)) + min ))
+            echo "Venter ${d}s..."
+            sleep "$d"
+          }
+
+          fetch_one() {
+            local key="$1" label="$2" url="$3" outfile="$4"
+            local attempt=1
+            while (( attempt <= MAX_ATTEMPTS )); do
+              if curl $CURL_OPTS "$url" -o "${outfile}.tmp"; then
+                mv "${outfile}.tmp" "$outfile"
+                echo "OK: $label (forsøg $attempt/$MAX_ATTEMPTS)"
+                return
+              fi
+              rm -f "${outfile}.tmp"
+              if (( attempt < MAX_ATTEMPTS )); then
+                echo "Forsøg $attempt/$MAX_ATTEMPTS fejlede for $label - venter og prøver igen" >&2
+                random_pause 5 25
+              fi
+              (( attempt++ ))
+            done
+            echo "ADVARSEL: kunne ikke hente $label efter $MAX_ATTEMPTS forsøg - beholder tidligere data i $outfile" >&2
+          }
+
+          # Kald 1/3: current-1m-u alene (i stedet for alle tre parametre i ét kald)
+          fetch_one "amager_u" "Amager Strand (DMI current-1m-u, split-test)" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u&datetime=${START}/${END}&f=GeoJSON" \
+            /tmp/amager-split-test/current-1m-u.json
+
+          # Samme 20-40s jitter mellem kaldene som pipelinen bruger mellem
+          # forskellige punkter - holder den variabel konstant, så kun
+          # kald-opdelingen (1 tungt vs. 3 lette) er det, der ændres i testen.
+          random_pause 20 40
+
+          # Kald 2/3: current-1m-v alene
+          fetch_one "amager_v" "Amager Strand (DMI current-1m-v, split-test)" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-v&datetime=${START}/${END}&f=GeoJSON" \
+            /tmp/amager-split-test/current-1m-v.json
+
+          random_pause 20 40
+
+          # Kald 3/3: sea-mean-deviation alene
+          fetch_one "amager_smd" "Amager Strand (DMI sea-mean-deviation, split-test)" \
+            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+            /tmp/amager-split-test/sea-mean-deviation.json
+
+          echo "Split-test færdig - se ovenstående log for succes/fejl pr. parameter."
