@@ -29,6 +29,20 @@ name: DMI Amager - test af opdelte kald (manuel)
 on:
   workflow_dispatch:
 
+# Deler concurrency-gruppe med dmi-current.yml (tilføjet 28/9-2026, efter
+# Esbens spørgsmål om at trigge denne manuelt tæt på de faste kørsler).
+# Uden dette kunne split-testen komme til at køre SAMTIDIG med en almindelig
+# pipeline-kørsel, hvis den bliver trigget for tidligt - præcis den situation
+# der gjorde kørsel #68/#69 problematiske (dobbelt samtidig DMI-belastning,
+# og for #68/#69's vedkommende også et commit/push-race, som ikke er
+# relevant her, da denne workflow ikke committer). Med samme gruppe sætter
+# GitHub Actions automatisk denne i kø, hvis dmi-current.yml allerede
+# kører - ingen grund til at time det helt præcist selv, bare vent til
+# den enten er færdig, eller stol på køen.
+concurrency:
+  group: dmi-current
+  cancel-in-progress: false
+
 jobs:
   split-test:
     runs-on: ubuntu-latest
