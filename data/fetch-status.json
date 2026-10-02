@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-10-01T21:05:52Z",
+  "run_at": "2026-10-02T10:50:31Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
@@ -15,7 +15,7 @@
     },
     "valkyrien": {
       "label": "Valkyrien/Køge (DMI strøm/vandstand)",
-      "status": "failed"
+      "status": "ok"
     },
     "amager_watertemp": {
       "label": "Amager Strand (live vandtemp, Kastrup Havn II)",
