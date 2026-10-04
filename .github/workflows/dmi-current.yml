@@ -1,92 +1,33 @@
+---
 name: Fetch DMI current & water level
 
-# Kørte oprindeligt én gang dagligt kl. 11:00 UTC (13:00 dansk sommertid /
-# 12:00 vintertid), og kan også køres manuelt fra GitHub ("Run workflow").
+# Historik (kort - den fulde baggrund står i dmi-pi-automation-hukommelsen
+# og i commit-historikken):
+# - 16-19/9-2026: tidspunkt flyttet, to daglige kørsler, 6 forsøg med
+#   tilfældig pause mellem forsøg (jitter), live vandtemp fra DMI's
+#   oceanObs (stationerne 30333 Kastrup Havn II, 30334 Københavns Havn II,
+#   30479 Køge Havn II - 30478 er død), Valkyrien tilføjet (badebroens
+#   koordinat), Kattegatvej-punktet flyttet ca. 350-400 m ud i havnemundingen
+#   (adressens eget punkt giver null i DMI's havmodel).
+# - 23/9-2026: prognosevindue 72 -> 36 timer (halv svarstørrelse, samme
+#   antal kald). Gælder kun denne pipelines cache (data/*-current.json).
+# - 27/9-2026: cron-job.org starter kørslerne via workflow_dispatch (GitHub's
+#   egen tidsplan er blevet upålidelig); run-name viser startkilden;
+#   concurrency-gruppe og push-retry (kørsel #68/#69 kolliderede).
 #
-# Tidspunktet blev flyttet fra kl. 05:00 UTC (07:00 sommertid) den 16/9-2026:
-# de sidste 5 morgenkørsler havde alle mindst ét (ofte to) af de tre DMI-kald
-# fejle, mens den eneste kørsel midt på dagen i samme periode (kl. 13:10
-# lokal) lykkedes for alle tre. Formodning: DMI's egen havmodel bliver
-# publiceret omkring den tidlige morgentime, og/eller mange andre
-# automatiske jobs rammer DMI's API på samme runde klokkeslæt.
-#
-# Udvidet 17/9-2026 med to nye kald til DMI's "Oceanographic Observation and
-# Tidewater API" (v2/oceanObs), der giver live vandtemperatur fra rigtige
-# målestationer - som supplement til strøm/vandstand-prognosen fra
-# forecastedr-modellen ovenfor. Denne API kræver (siden DMI fjernede krav om
-# API-nøgle 2/12-2025) ingen nøgle overhovedet. Testet manuelt 17/9-2026:
-# station 30333 (Kastrup Havn II) og 30334 (Københavns Havn II) leverer
-# begge friske målinger med ca. 10 minutters mellemrum.
-#
-# Udvidet igen 19/9-2026 med to punkter for Valkyrien, en vinterbadeforening
-# i Køge - en ny lokation ud over de tre københavnske. Live vandtemp kommer
-# fra DMI's oceanObs-station "Køge Havn II" (30479) - søsterstationen
-# "Køge Havn I" (30478) er testet og bekræftet død (returnerer kun en
-# måling fra 2020), så den bruges ikke.
-#
-# Koordinatet for strøm/vandstand rettet samme dag (19/9-2026): oprindeligt
-# sat til Valkyriens klubhus/mole (Søndre Molevej 30, 55.4529533N
-# 12.2002726E), men Esben præciserede at selve vandgangen sker fra en
-# badebro ca. 400 m derfra (55.4493889N 12.1992778E - 55d26m57.8sN
-# 12d11m57.4sE), med en anden kystorientering (molen vender mod syd,
-# badebroen ud mod øst - relevant for brandmænd-vurderingen, se
-# dmi-pi-automation-hukommelsen). Testet manuelt 19/9-2026: forecastedr-
-# modellen har gyldige (ikke-null) data direkte på badebroens koordinat,
-# ingen justering nødvendig.
-#
-# Skema ændret igen 19/9-2026, to ting på én gang:
-# 1) To kørsler dagligt i stedet for én, som redundans. fetch_one() gemmer
-# kun nye data ved succes (se logikken nedenfor), så en ekstra kørsel er
-# risikofri og øger blot chancen for, at alle punkter får friske data
-# mindst én gang i døgnet. NB: data/fetch-status.json bliver overskrevet
-# ved hver kørsel, så den viser altid kun den SENESTE af dagens to
-# kørsler, ikke en samlet status for begge.
-# 2) Begge tidspunkter er bevidst IKKE runde klokkeslæt/minuttal. Baggrund:
-# GitHub's egen dokumentation for schedule-events advarer direkte om, at
-# "your scheduled workflow may experience delays. High load can occur
-# when many GitHub Actions workflows are set to run at the same time of
-# day" - og runde klokkeslæt (især :00) er formodentlig det mest
-# almindelige valg for andre cron-jobs, både i GitHub Actions selv og
-# hos andre automatiserede klienter, der rammer DMI's API. Det er samme
-# jitter-logik, som allerede bruges mellem de enkelte DMI-kald nedenfor,
-# nu udvidet til selve kørselstidspunkterne. Ikke testet endnu om det
-# gør en reel forskel - hold øje med data/fetch-status.json fremover.
-#
-# Prognosevinduet for strøm/vandstand-kaldene (forecastedr/dkss_idw)
-# reduceret fra 72 til 36 timer den 23/9-2026. Baggrund: de faste
-# tilbagevendende rapporter (Amager + Valkyrien torsdag/fredag) kigger
-# reelt aldrig mere end ca. 15 timer frem (den længste er Valkyrien
-# fredag: 18:00 -> lørdag 09:00), så 72 timer var langt mere end der
-# reelt bruges. Et forecastedr-kald med 3 parametre over et 72-timers
-# vindue viste sig (testet 22-23/9-2026) at returnere 73 tidssteg
-# (0-72t inklusive) x 3 parametre = 219 datapunkter i et ca. 17 KB svar,
-# og kræver at DMI's IDW-model spatialt interpolerer for hvert tidsskridt
-# på et vilkårligt koordinat - en tung forespørgsel, som er den bedst
-# underbyggede forklaring på, hvorfor netop disse fire kald (i
-# modsætning til de tre vandtemp-kald, der har 100% succesrate) rammer
-# DMI's throttling. Et tilsvarende 36-timers kald blev testet live
-# 23/9-2026 og gav 37 tidssteg/~8,7 KB - stort set en halvering, som
-# forventet, uden at ændre antallet af HTTP-kald. NB: dette 36-timers
-# vindue gælder KUN denne pipelines egen cache (data/*-current.json),
-# som de faste triggers læser for at kunne virke uden Esbens computer
-# online - det begrænser IKKE ad hoc-forespørgsler i Cowork-chatten,
-# som altid laver deres eget friske DMI-kald med det vindue, det
-# konkrete spørgsmål kræver. Se dmi-pi-automation-hukommelsen ("In-
-# progress: optimizing DMI call weight") for hele baggrunden, inkl. det
-# konkrete regnestykke der viste at et 36-timers CACHE-vindue ville være
-# utilstrækkeligt til en ad hoc-forespørgsel om en svømmetur flere dage
-# ude i fremtiden.
-# Navn i Actions-listen (27/9-2026): viser hvem der startede kørslen.
-# cron-job.org sender inputs.source med (fx "cron-job.org DMI middag");
-# GitHubs egen tidsplan vises som "GitHub-tidsplan (reserve)"; et klik på
-# "Run workflow" uden andet vises som "manuel".
+# NYT 4/10-2026 (udkast): kørslen kan afgrænses til bestemte lokationer via
+# inputtet "locations" (kommasepareret: amager, nordhavn, kattegatvej,
+# valkyrien, svaneknoppen - eller "alle"). Svaneknoppen (Svanemøllebugtens
+# Vinterbadelaug, København Ø) er tilføjet som ny lokation. Vandtemp-kald
+# deles: station 30334 dækker nordhavn, kattegatvej og svaneknoppen, så den
+# hentes kun én gang pr. kørsel. data/fetch-status.json bliver nu FLETTET
+# pr. punkt (hvert punkt har sit eget run_at), så en kørsel med kun
+# "amager" ikke sletter status for de øvrige punkter.
 run-name: "${{ github.event_name == 'schedule' && 'DMI - GitHub-tidsplan (reserve)' || format('DMI - {0}', inputs.source || 'manuel') }}"
 
 on:
-  # Siden 27/9-2026 startes kørslerne primært af cron-job.org via
-  # workflow_dispatch (12:47 og 18:13 dansk tid, følger selv vintertid).
-  # GitHubs egen tidsplan herunder er kun reserve, fordi den er blevet
-  # upålidelig (kørsler timer for sent eller slet ikke).
+  # GitHub's egen tidsplan er kun reserve (cron-job.org er primær). Kørsler
+  # fra tidsplanen har intet "locations"-input og henter derfor alle punkter.
   schedule:
     - cron: '47 10 * * *'  # ca. kl. 12:47 dansk sommertid / 11:47 vintertid
     - cron: '13 16 * * *'  # ca. kl. 18:13 dansk sommertid / 17:13 vintertid
@@ -97,13 +38,16 @@ on:
         required: false
         default: 'manuel'
         type: string
+      locations:
+        description: 'Lokationer: alle, eller kommasepareret liste (amager,nordhavn,kattegatvej,valkyrien,svaneknoppen)'
+        required: false
+        default: 'alle'
+        type: string
 
 permissions:
   contents: write
 
-# Højst én DMI-kørsel ad gangen (27/9-2026). Kørsel #68 og #69 kørte
-# samtidig og #69 fejlede både på DMI-kald og commit. Kommer der en ny
-# kørsel, mens en anden kører, venter den i kø i stedet for at starte.
+# Højst én DMI-kørsel ad gangen: en ny kørsel venter i kø, mens en anden kører.
 concurrency:
   group: dmi-current
   cancel-in-progress: false
@@ -114,46 +58,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch DMI ocean forecast (Amager Strand + Nordhavn/Sandkaj + Kattegatvej/Nordhavn Havsvømmebane + Valkyrien/Køge)
+      - name: Fetch DMI ocean forecast and water temperature (valgte lokationer)
+        env:
+          LOCATIONS_INPUT: ${{ inputs.locations }}
         run: |
           mkdir -p data
           START=$(date -u +%Y-%m-%dT%H:00:00Z)
           END=$(date -u -d "+36 hours" +%Y-%m-%dT%H:00:00Z)
 
-          # -f gør, at curl regner en HTTP-fejl (fx 429) som en fejl i sig selv,
-          # i stedet for bare at gemme fejlsiden som om det var rigtige data.
-          # -A sætter en almindelig browser-lignende User-Agent, da nogle
-          # tjenester ellers afviser curl's standard-UA.
-          # --connect-timeout 10 sætter et loft på 10 sekunder for selve det at
-          # oprette forbindelsen; --max-time 30 sætter et loft på 30 sekunder
-          # for HELE kaldet (DNS+forbindelse+svar). Tilføjet 19/9-2026, fordi
-          # der ellers ikke var noget loft: hvis DMI tog imod forbindelsen men
-          # aldrig svarede, kunne ét enkelt forsøg i praksis hænge langt ud
-          # over de bevidste random_pause-ventetider nedenfor.
-          #
-          # Retry-logikken er (19/9-2026) flyttet fra curl's indbyggede
-          # --retry/--retry-delay (som kun tillader ÉN fast ventetid mellem
-          # forsøg) til en håndskrevet løkke nedenfor, så ventetiden mellem
-          # forsøg kan gøres tilfældig i stedet for helt periodisk - se
-          # begrundelsen ved random_pause/fetch_one nedenfor.
+          # Hvilke lokationer skal med i denne kørsel? Tom/manglende = alle.
+          LOCATIONS="${LOCATIONS_INPUT:-alle}"
+          LOC=",$(echo "$LOCATIONS" | tr 'A-Z' 'a-z' | tr -d ' '),"
+          echo "Lokationer i denne kørsel: $LOCATIONS"
+          want() { [[ "$LOC" == *",alle,"* || "$LOC" == *",$1,"* ]]; }
+
+          # -f: en HTTP-fejl (fx 429) tæller som fejl i sig selv.
+          # -A: browser-lignende User-Agent. Loft på 10 s for forbindelsen og
+          # 30 s for hele kaldet, så et enkelt forsøg ikke kan hænge.
           CURL_OPTS="-f -sS -A Mozilla/5.0 --connect-timeout 10 --max-time 30"
           MAX_ATTEMPTS=6
 
-          # Samler status for hvert punkt op, så vi kan skrive en samlet
-          # data/fetch-status.json i slutningen - så det er synligt uden at
-          # skulle grave i commit-historik eller Actions-logs (som kræver
-          # login for at se i fuld længde), hvilket af punkterne der rent
-          # faktisk lykkedes i denne kørsel.
+          # Status pr. punkt i denne kørsel (flettes ind i data/fetch-status.json).
           STATUS=()
 
-          # Tilfældig ventetid i intervallet [min,max] sekunder (inklusive).
-          # Bruges både mellem retry-forsøg på samme kald og mellem de
-          # forskellige kald, så vi ikke rammer DMI med et helt forudsigeligt,
-          # metronom-agtigt mønster hver dag på præcis samme sekund-afstande -
-          # hvis den observerede 429-throttling (se dmi-pi-automation-noterne)
-          # hænger sammen med andre automatiske jobs, der selv kører i et
-          # fast mønster, mindsker jitter chancen for at vi konsekvent rammer
-          # samme smalle congestion-vindue hver dag.
+          # Tilfældig ventetid [min,max] sekunder, så vi ikke rammer DMI i et
+          # metronom-agtigt mønster.
           random_pause() {
             local min="$1" max="$2" d
             d=$(( (RANDOM % (max - min + 1)) + min ))
@@ -161,10 +90,19 @@ jobs:
             sleep "$d"
           }
 
-          # Henter til en midlertidig .tmp-fil og erstatter kun den rigtige fil,
-          # hvis hentningen lykkedes - så en fejlet hentning aldrig overskriver
-          # gode, tidligere data med en fejlbesked. Prøver op til MAX_ATTEMPTS
-          # gange med en tilfældig pause (5-25s) mellem forsøg ved fejl.
+          # Pause mellem kald - men ikke før det allerførste kald i kørslen.
+          FIRST=1
+          gap() {
+            if (( FIRST )); then
+              FIRST=0
+            else
+              random_pause "$1" "$2"
+            fi
+          }
+
+          # Henter til .tmp og erstatter kun den rigtige fil ved succes, så en
+          # fejlet hentning aldrig overskriver gode data. Op til MAX_ATTEMPTS
+          # forsøg med tilfældig pause (5-25 s) imellem.
           fetch_one() {
             local key="$1" label="$2" url="$3" outfile="$4"
             local attempt=1
@@ -186,92 +124,103 @@ jobs:
             STATUS+=("{\"key\":\"$key\",\"label\":$(jq -Rn --arg l "$label" '$l'),\"status\":\"failed\"}")
           }
 
-          # Amager Strand (svømmerutens midtpunkt)
-          fetch_one "amager" "Amager Strand (DMI strøm/vandstand)" \
-            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            data/amager-current.json
+          # --- Strøm og vandstand (DMI forecastedr / dkss_idw) ---
 
-          # Pause mellem kaldene, så vi ikke rammer DMI's delte fair-use-grænse
-          # ved at sende kaldene lige efter hinanden. Øget fra 10 til 30
-          # sekunder (16/9-2026), og fra fast 30s til tilfældig 20-40s
-          # (19/9-2026, se random_pause ovenfor) i forsøg på at undgå
-          # rate-limit-relaterede udfald, som ramte 2 ud af 3 punkter i næsten
-          # alle morgenkørsler.
-          random_pause 20 40
+          if want amager; then
+            gap 20 40
+            # Amager Strand (svømmerutens midtpunkt)
+            fetch_one "amager" "Amager Strand (DMI strøm/vandstand)" \
+              "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6428%2055.6610)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+              data/amager-current.json
+          fi
 
-          # Nordhavnens svømmebane (Sandkaj Badezone)
-          fetch_one "nordhavn" "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)" \
-            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            data/nordhavn-current.json
+          if want nordhavn; then
+            gap 20 40
+            # Nordhavn / Sandkaj Badezone
+            fetch_one "nordhavn" "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)" \
+              "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5973%2055.7065)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+              data/nordhavn-current.json
+          fi
 
-          random_pause 20 40
+          if want kattegatvej; then
+            gap 20 40
+            # Nordhavn Havsvømmebane (Kattegatvej 59) - punktet er flyttet ca.
+            # 350-400 m ud i havnemundingen, fordi adressens eget punkt giver
+            # null i DMI's havmodel.
+            fetch_one "kattegatvej" "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)" \
+              "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6150%2055.7200)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+              data/kattegatvej-current.json
+          fi
 
-          # Nordhavnens Havsvømmebane (Kattegatvej 59) - punktet er flyttet ca.
-          # 350-400 m ud i havnemundingen fra selve adressen, fordi DMI's
-          # havmodel ikke har gyldige data helt inde ved kajkanten (testet
-          # 13/9-2026: adressens eget koordinat gav kun null-værdier).
-          fetch_one "kattegatvej" "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)" \
-            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.6150%2055.7200)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            data/kattegatvej-current.json
+          if want svaneknoppen; then
+            gap 20 40
+            # Svaneknoppen 7, København Ø - Svanemøllebugtens Vinterbadelaugs
+            # badebro (55.7185075N 12.5889338E, oplyst af Esben 4/10-2026).
+            fetch_one "svaneknoppen" "Svaneknoppen/Svanemøllen (DMI strøm/vandstand)" \
+              "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.5889338%2055.7185075)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+              data/svaneknoppen-current.json
+          fi
 
-          random_pause 20 40
+          if want valkyrien; then
+            gap 20 40
+            # Valkyrien (Køge) - koordinatet er badebroen, ikke klubhuset.
+            fetch_one "valkyrien" "Valkyrien/Køge (DMI strøm/vandstand)" \
+              "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.1992778%2055.4493889)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
+              data/valkyrien-current.json
+          fi
 
-          # Valkyrien (vinterbadeforening i Køge) - koordinatet er badebroen,
-          # hvor der faktisk gås i vand (55.4493889N 12.1992778E), ikke
-          # klubhuset/molen (rettet 19/9-2026, se kommentar øverst i filen).
-          # DMI's havmodel har gyldige data direkte her, ingen justering
-          # nødvendig (testet 19/9-2026).
-          fetch_one "valkyrien" "Valkyrien/Køge (DMI strøm/vandstand)" \
-            "https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/position?coords=POINT(12.1992778%2055.4493889)&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON" \
-            data/valkyrien-current.json
+          # --- Live vandtemperatur (DMI oceanObs, målestationer, ingen nøgle) ---
 
-          random_pause 20 40
+          if want amager; then
+            gap 10 20
+            # Kastrup Havn II (30333) dækker Amager Strand.
+            fetch_one "amager_watertemp" "Amager Strand (live vandtemp, Kastrup Havn II)" \
+              "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30333&parameterId=tw&period=latest" \
+              data/amager-watertemp.json
+          fi
 
-          # Live vandtemperatur fra DMI's oceanObs-API (rigtige målestationer,
-          # ikke en model) - ingen API-nøgle nødvendig. "period=latest" giver
-          # præcis én, den nyeste, måling. Kastrup Havn II (station 30333)
-          # dækker Amager Strand; Københavns Havn II (station 30334) dækker
-          # både Nordhavn/Sandkaj Badezone og Kattegatvej/Nordhavn
-          # Havsvømmebane (samme station brugt til alle tre, ligesom den
-          # manuelle dmi.dk/havtemperatur-opslag hidtil har gjort). Køge Havn
-          # II (station 30479) dækker Valkyrien - søsterstationen Køge Havn I
-          # (30478) er bekræftet død (kun en måling fra 2020), bruges ikke.
-          fetch_one "amager_watertemp" "Amager Strand (live vandtemp, Kastrup Havn II)" \
-            "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30333&parameterId=tw&period=latest" \
-            data/amager-watertemp.json
+          if want nordhavn || want kattegatvej || want svaneknoppen; then
+            gap 10 20
+            # Københavns Havn II (30334) dækker Nordhavn/Sandkaj, Kattegatvej
+            # og Svaneknoppen - ét kald til alle tre.
+            fetch_one "nordhavn_watertemp" "Nordhavn/Sandkaj/Kattegatvej/Svaneknoppen (live vandtemp, Københavns Havn II)" \
+              "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30334&parameterId=tw&period=latest" \
+              data/nordhavn-watertemp.json
+          fi
 
-          random_pause 10 20
+          if want valkyrien; then
+            gap 10 20
+            # Køge Havn II (30479) dækker Valkyrien.
+            fetch_one "valkyrien_watertemp" "Valkyrien/Køge (live vandtemp, Køge Havn II)" \
+              "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30479&parameterId=tw&period=latest" \
+              data/valkyrien-watertemp.json
+          fi
 
-          fetch_one "nordhavn_watertemp" "Nordhavn/Sandkaj/Kattegatvej (live vandtemp, Københavns Havn II)" \
-            "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30334&parameterId=tw&period=latest" \
-            data/nordhavn-watertemp.json
+          # Intet valgt (fx stavefejl i locations)? Fejl tydeligt i stedet for
+          # at skrive en tom status.
+          if (( ${#STATUS[@]} == 0 )); then
+            echo "FEJL: ingen lokationer matchede '$LOCATIONS'" >&2
+            exit 1
+          fi
 
-          random_pause 10 20
-
-          fetch_one "valkyrien_watertemp" "Valkyrien/Køge (live vandtemp, Køge Havn II)" \
-            "https://opendataapi.dmi.dk/v2/oceanObs/collections/observation/items?stationId=30479&parameterId=tw&period=latest" \
-            data/valkyrien-watertemp.json
-
-          # Skriver samlet status for denne kørsel - ét blik afslører, om et
-          # eller flere punkter fejlede, uden at skulle sammenligne datofiler
-          # eller læse Actions-logs.
-          printf '%s\n' "${STATUS[@]}" | jq -s --arg run_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{run_at: $run_at, points: (map({(.key): {label: .label, status: .status}}) | add)}' \
-            > data/fetch-status.json
+          # Flet status ind i data/fetch-status.json: punkter fra DENNE kørsel
+          # overskrives (med eget run_at), øvrige punkter bevares uændret.
+          # run_at øverst = tidspunktet for den seneste kørsel.
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          OLD='{}'
+          if [ -s data/fetch-status.json ]; then
+            OLD=$(jq -c '.points // {}' data/fetch-status.json 2>/dev/null || echo '{}')
+          fi
+          NEW=$(printf '%s\n' "${STATUS[@]}" | jq -s --arg ts "$NOW" \
+            'map({(.key): {label: .label, status: .status, run_at: $ts}}) | add')
+          jq -n --arg run_at "$NOW" --argjson old "$OLD" --argjson new "$NEW" \
+            '{run_at: $run_at, points: ($old + $new)}' > data/fetch-status.json
 
       - name: Write timestamp
         run: |
-          # Badevandskvalitet kunne ikke hentes pålideligt fra nogen af de
-          # forsøgte kilder (badevand.dk, vandudsigten.dk, badevand.com) -
-          # de blokerer alle tilsyneladende trafik fra cloud/datacenter-IP'er
-          # som GitHub Actions'. Det tjekkes derfor fortsat manuelt/interaktivt
-          # i stedet. Denne workflow henter kun DMI's strøm/vandstand-data og
-          # (siden 17/9-2026) live vandtemperatur.
-          #
-          # NB: dette tidsstempel opdateres altid, uanset om et eller flere
-          # af DMI-kaldene ovenfor fejlede - det viser kun, at workflowet
-          # kørte, ikke at alle punkters data er friske. Brug
-          # data/fetch-status.json for status pr. punkt.
+          # Tidsstemplet opdateres altid, også hvis DMI-kald fejlede - det
+          # viser kun at workflowet kørte. Brug data/fetch-status.json for
+          # status pr. punkt (nu med eget run_at pr. punkt).
           date -u +%Y-%m-%dT%H:%M:%SZ > data/last-updated.txt
 
       - name: Commit and push
@@ -280,9 +229,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
           git diff --staged --quiet || git commit -m "Update swim conditions data"
-          # Op til 4 forsøg (27/9-2026): ditbadevand-workflowet skriver til
-          # samme repo hver time, så et push kan blive afvist, hvis det
-          # når at committe først. Hent i så fald de nye ændringer og prøv igen.
+          # Op til 4 forsøg: ditbadevand-workflowet skriver til samme repo
+          # hver time, så et push kan blive afvist - hent og prøv igen.
           for i in 1 2 3 4; do
             git pull --rebase origin main && git push && exit 0
             echo "Push-forsøg $i fejlede - prøver igen"
@@ -290,4 +238,3 @@ jobs:
           done
           echo "Push fejlede efter 4 forsøg"
           exit 1
-          
