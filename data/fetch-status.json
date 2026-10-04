@@ -1,5 +1,5 @@
 {
-  "run_at": "2026-10-04T10:53:01Z",
+  "run_at": "2026-10-04T14:55:25Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
@@ -22,12 +22,18 @@
       "status": "ok"
     },
     "nordhavn_watertemp": {
-      "label": "Nordhavn/Sandkaj/Kattegatvej (live vandtemp, Københavns Havn II)",
-      "status": "ok"
+      "label": "Nordhavn/Sandkaj/Kattegatvej/Svaneknoppen (live vandtemp, Københavns Havn II)",
+      "status": "ok",
+      "run_at": "2026-10-04T14:55:25Z"
     },
     "valkyrien_watertemp": {
       "label": "Valkyrien/Køge (live vandtemp, Køge Havn II)",
       "status": "ok"
+    },
+    "svaneknoppen": {
+      "label": "Svaneknoppen/Svanemøllen (DMI strøm/vandstand)",
+      "status": "ok",
+      "run_at": "2026-10-04T14:55:25Z"
     }
   }
 }
