@@ -15,7 +15,9 @@ name: Fetch DMI current & water level
 #   egen tidsplan er blevet upålidelig); run-name viser startkilden;
 #   concurrency-gruppe og push-retry (kørsel #68/#69 kolliderede).
 #
-# NYT 4/10-2026 (udkast): kørslen kan afgrænses til bestemte lokationer via
+# 4/10-2026: GitHub-tidsplanen (schedule) fjernet, se under "on:".
+#
+# NYT 4/10-2026: kørslen kan afgrænses til bestemte lokationer via
 # inputtet "locations" (kommasepareret: amager, nordhavn, kattegatvej,
 # valkyrien, svaneknoppen - eller "alle"). Svaneknoppen (Svanemøllebugtens
 # Vinterbadelaug, København Ø) er tilføjet som ny lokation. Vandtemp-kald
@@ -23,14 +25,14 @@ name: Fetch DMI current & water level
 # hentes kun én gang pr. kørsel. data/fetch-status.json bliver nu FLETTET
 # pr. punkt (hvert punkt har sit eget run_at), så en kørsel med kun
 # "amager" ikke sletter status for de øvrige punkter.
-run-name: "${{ github.event_name == 'schedule' && 'DMI - GitHub-tidsplan (reserve)' || format('DMI - {0}', inputs.source || 'manuel') }}"
+run-name: "${{ format('DMI - {0}', inputs.source || 'manuel') }}"
 
 on:
-  # GitHub's egen tidsplan er kun reserve (cron-job.org er primær). Kørsler
-  # fra tidsplanen har intet "locations"-input og henter derfor alle punkter.
-  schedule:
-    - cron: '47 10 * * *'  # ca. kl. 12:47 dansk sommertid / 11:47 vintertid
-    - cron: '13 16 * * *'  # ca. kl. 18:13 dansk sommertid / 17:13 vintertid
+  # Kørslerne startes udelukkende via workflow_dispatch: af cron-job.org
+  # efter skemaet i dmi-pi-automation-hukommelsen (04:45, 12:47, 14:40,
+  # 18:13, 22:45 dansk tid), eller manuelt via "Run workflow". GitHub's egen
+  # tidsplan (schedule) er fjernet 4/10-2026: den kom 1-6 timer for sent og
+  # gav to ekstra kørsler om dagen på tilfældige tidspunkter.
   workflow_dispatch:
     inputs:
       source:
