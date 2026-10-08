@@ -1,45 +1,45 @@
 {
-  "run_at": "2026-10-08T12:40:38Z",
+  "run_at": "2026-10-08T16:20:05Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
       "status": "ok",
-      "run_at": "2026-10-08T12:40:38Z"
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "nordhavn": {
       "label": "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)",
-      "status": "ok",
-      "run_at": "2026-10-08T02:50:24Z"
+      "status": "failed",
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "kattegatvej": {
       "label": "Nordhavn Havsvømmebane/Kattegatvej (DMI strøm/vandstand)",
-      "status": "ok",
-      "run_at": "2026-10-08T02:50:24Z"
+      "status": "failed",
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "valkyrien": {
       "label": "Valkyrien/Køge (DMI strøm/vandstand)",
       "status": "ok",
-      "run_at": "2026-10-08T02:50:24Z"
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "amager_watertemp": {
       "label": "Amager Strand (live vandtemp, Kastrup Havn II)",
       "status": "ok",
-      "run_at": "2026-10-08T12:40:38Z"
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "nordhavn_watertemp": {
       "label": "Nordhavn/Sandkaj/Kattegatvej/Svaneknoppen (live vandtemp, Københavns Havn II)",
       "status": "ok",
-      "run_at": "2026-10-08T02:50:24Z"
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "valkyrien_watertemp": {
       "label": "Valkyrien/Køge (live vandtemp, Køge Havn II)",
       "status": "ok",
-      "run_at": "2026-10-08T02:50:24Z"
+      "run_at": "2026-10-08T16:20:05Z"
     },
     "svaneknoppen": {
       "label": "Svaneknoppen/Svanemøllen (DMI strøm/vandstand)",
       "status": "ok",
-      "run_at": "2026-10-08T02:50:24Z"
+      "run_at": "2026-10-08T16:20:05Z"
     }
   }
 }
