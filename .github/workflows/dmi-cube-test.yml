@@ -1,0 +1,140 @@
+name: DMI København - test af /cube (log-only)
+
+# Test aftalt med Esben 31/10-2026, kører 1-2 uger ved siden af dmi-current.yml.
+# Spørgsmål: lykkes ÉT /cube-kald for en boks over København oftere end de
+# separate /position-kald i den almindelige pipeline (amager, nordhavn=Sandkaj,
+# kattegatvej, svaneknoppen)? Valkyrien er ikke med (ligger uden for boksen).
+#
+# Testen rører IKKE data/*-current.json eller data/fetch-status.json. Den
+# skriver kun én linje pr. kørsel i data/cube-test/log.csv.
+# Samme concurrency-gruppe som dmi-current.yml, så den kører lige efter -
+# aldrig samtidig med - hovedkørslen. Startes af cron-job.org.
+#
+# Boks: 12.58,55.655,12.65,55.725 (40 modelceller ca. 0,9 km, 37 timer).
+# For hver lokation bruges nærmeste celle med havdata (testet 31/10: alle
+# fire under 0,5 km). Retry-profil som hovedpipelinen: 6 forsøg, 5-25 s pause;
+# max-time 60 s fordi svaret er større (ca. 340 KB, testet 16 s).
+
+run-name: "${{ format('DMI cube-test - {0}', inputs.source || 'manuel') }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Hvem starter kørslen (vises i Actions-listen)'
+        required: false
+        default: 'manuel'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dmi-current
+  cancel-in-progress: false
+
+jobs:
+  cube:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hent /cube for København (op til 6 forsøg)
+        env:
+          SOURCE: ${{ inputs.source || 'manuel' }}
+        run: |
+          set -u
+          mkdir -p data/cube-test
+          BBOX="12.58,55.655,12.65,55.725"
+          START=$(date -u +%Y-%m-%dT%H:00:00Z)
+          END=$(date -u -d "+36 hours" +%Y-%m-%dT%H:00:00Z)
+          URL="https://opendataapi.dmi.dk/v1/forecastedr/collections/dkss_idw/cube?bbox=${BBOX}&crs=crs84&parameter-name=current-1m-u,current-1m-v,sea-mean-deviation&datetime=${START}/${END}&f=GeoJSON"
+          RUN_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          RESULT="failed"; ATTEMPTS=0; LAST="none"; SECS=""; BYTES=""
+          for i in 1 2 3 4 5 6; do
+            ATTEMPTS=$i
+            T0=$(date +%s.%N)
+            CODE=$(curl -s -o cube.json -w '%{http_code}' --connect-timeout 10 --max-time 60 "$URL")
+            RC=$?
+            T1=$(date +%s.%N)
+            if [ "$RC" -eq 0 ] && [ "$CODE" = "200" ]; then
+              RESULT="ok"; LAST="200"
+              SECS=$(python3 -c "print(round($T1-$T0,1))")
+              BYTES=$(stat -c %s cube.json)
+              echo "OK: cube (forsøg $i/6, ${SECS}s, ${BYTES} B)"
+              break
+            fi
+            if [ "$RC" -eq 28 ]; then LAST="timeout"; else LAST="http${CODE}"; fi
+            echo "Forsøg $i/6 fejlede: $LAST (curl $RC)"
+            if [ "$i" -lt 6 ]; then
+              d=$(( (RANDOM % 21) + 5 ))
+              echo "Venter ${d}s..."
+              sleep "$d"
+            fi
+          done
+          if [ "$RESULT" != "ok" ]; then echo "ADVARSEL: cube gav op efter 6 forsøg ($LAST)"; fi
+          python3 - "$RUN_AT" "$SOURCE" "$RESULT" "$ATTEMPTS" "$LAST" "$SECS" "$BYTES" <<'PY'
+          import csv, json, math, os, sys
+          run_at, source, result, attempts, last, secs, nbytes = sys.argv[1:8]
+          locs = {"amager": (12.6428, 55.6610), "sandkaj": (12.5973, 55.7065),
+                  "kattegatvej": (12.6150, 55.7200), "svaneknoppen": (12.5889, 55.7185)}
+          fields = ["run_at", "source", "result", "attempts", "last_status", "seconds",
+                    "bytes", "n_cells", "n_steps", "probe_step"]
+          for k in locs:
+              fields += [k + "_ok", k + "_km", k + "_u", k + "_v", k + "_smd"]
+          row = {f: "" for f in fields}
+          row.update(run_at=run_at, source=source, result=result, attempts=attempts,
+                     last_status=last, seconds=secs, bytes=nbytes)
+          def dist(c, lo, la):
+              return math.hypot((c[0] - lo) * 62.7, (c[1] - la) * 111.2)
+          if result == "ok":
+              try:
+                  feats = json.load(open("cube.json"))["features"]
+                  cells = {}
+                  for f in feats:
+                      lon, lat = f["geometry"]["coordinates"][:2]
+                      cells.setdefault((round(lon, 5), round(lat, 5)), []).append(f["properties"])
+                  steps = sorted({p["step"] for ps in cells.values() for p in ps})
+                  probe = steps[min(6, len(steps) - 1)] if steps else ""
+                  row.update(n_cells=len(cells), n_steps=len(steps), probe_step=probe)
+                  valid = {c: ps for c, ps in cells.items()
+                           if any(p.get("current-1m-u") is not None for p in ps)}
+                  for k, (lo, la) in locs.items():
+                      if not valid:
+                          row[k + "_ok"] = 0
+                          continue
+                      c = min(valid, key=lambda c: dist(c, lo, la))
+                      km = dist(c, lo, la)
+                      p = {q["step"]: q for q in valid[c]}.get(probe, {})
+                      row[k + "_ok"] = int(km <= 1.5 and p.get("current-1m-u") is not None)
+                      row[k + "_km"] = round(km, 2)
+                      row[k + "_u"] = p.get("current-1m-u", "")
+                      row[k + "_v"] = p.get("current-1m-v", "")
+                      row[k + "_smd"] = p.get("sea-mean-deviation", "")
+              except Exception as e:
+                  row["result"] = "parse_error"
+                  print("Parse-fejl:", e)
+          path = "data/cube-test/log.csv"
+          new = not os.path.exists(path)
+          with open(path, "a", newline="") as fh:
+              w = csv.DictWriter(fh, fieldnames=fields)
+              if new:
+                  w.writeheader()
+              w.writerow(row)
+          print("Loglinje:", {k: row[k] for k in ["run_at", "result", "attempts", "last_status", "seconds"]})
+          print("Pr. lokation:", {k: row[k + "_ok"] for k in locs})
+          PY
+
+      - name: Gem loglinje
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/cube-test/log.csv
+          git commit -q -m "cube-test log" || exit 0
+          for i in 1 2 3 4; do
+            git pull --rebase -q && git push -q && exit 0
+            sleep $(( i * 5 ))
+          done
+          echo "Kunne ikke pushe loglinjen"
+          exit 1
