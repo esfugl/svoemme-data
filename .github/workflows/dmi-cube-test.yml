@@ -55,8 +55,9 @@ jobs:
           for i in 1 2 3 4 5 6; do
             ATTEMPTS=$i
             T0=$(date +%s.%N)
-            CODE=$(curl -s -o cube.json -w '%{http_code}' --connect-timeout 10 --max-time 60 "$URL")
-            RC=$?
+            # GitHub kører bash med -e: fang curl's exit-kode, så en timeout (28) ikke stopper scriptet
+            RC=0
+            CODE=$(curl -s -o cube.json -w '%{http_code}' --connect-timeout 10 --max-time 60 "$URL") || RC=$?
             T1=$(date +%s.%N)
             if [ "$RC" -eq 0 ] && [ "$CODE" = "200" ]; then
               RESULT="ok"; LAST="200"
