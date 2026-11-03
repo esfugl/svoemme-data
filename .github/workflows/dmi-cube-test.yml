@@ -6,7 +6,9 @@ name: DMI København - test af /cube (log-only)
 # kattegatvej, svaneknoppen)? Valkyrien er ikke med (ligger uden for boksen).
 #
 # Testen rører IKKE data/*-current.json eller data/fetch-status.json. Den
-# skriver kun én linje pr. kørsel i data/cube-test/log.csv.
+# skriver én linje pr. kørsel i data/cube-test/log.csv og (fra 3/11) hele
+# tidsserien pr. lokation i data/cube-test/<navn>-current.json (samme form som
+# hovedfilerne) + data/cube-test/fetch-status.json. Ved fejl beholdes de gamle filer.
 # Samme concurrency-gruppe som dmi-current.yml, så den kører lige efter -
 # aldrig samtidig med - hovedkørslen. Startes af cron-job.org.
 #
@@ -80,6 +82,10 @@ jobs:
           run_at, source, result, attempts, last, secs, nbytes = sys.argv[1:8]
           locs = {"amager": (12.6428, 55.6610), "sandkaj": (12.5973, 55.7065),
                   "kattegatvej": (12.6150, 55.7200), "svaneknoppen": (12.5889, 55.7185)}
+          # Filnavne som hovedpipelinen (Sandkaj hedder "nordhavn" der)
+          outname = {"amager": "amager", "sandkaj": "nordhavn",
+                     "kattegatvej": "kattegatvej", "svaneknoppen": "svaneknoppen"}
+          P = ("current-1m-u", "current-1m-v", "sea-mean-deviation")
           fields = ["run_at", "source", "result", "attempts", "last_status", "seconds",
                     "bytes", "n_cells", "n_steps", "probe_step"]
           for k in locs:
@@ -99,20 +105,57 @@ jobs:
                   steps = sorted({p["step"] for ps in cells.values() for p in ps})
                   probe = steps[min(6, len(steps) - 1)] if steps else ""
                   row.update(n_cells=len(cells), n_steps=len(steps), probe_step=probe)
+                  def ok(v):
+                      return v is not None and not (isinstance(v, float) and math.isnan(v))
                   valid = {c: ps for c, ps in cells.items()
-                           if any(p.get("current-1m-u") is not None for p in ps)}
+                           if any(ok(p.get("current-1m-u")) for p in ps)}
+                  valid_smd = {c: ps for c, ps in cells.items()
+                               if any(ok(p.get("sea-mean-deviation")) for p in ps)}
+                  os.makedirs("data/cube-test", exist_ok=True)
+                  status_path = "data/cube-test/fetch-status.json"
+                  try:
+                      status = json.load(open(status_path))
+                  except Exception:
+                      status = {"points": {}}
                   for k, (lo, la) in locs.items():
                       if not valid:
                           row[k + "_ok"] = 0
                           continue
                       c = min(valid, key=lambda c: dist(c, lo, la))
                       km = dist(c, lo, la)
-                      p = {q["step"]: q for q in valid[c]}.get(probe, {})
-                      row[k + "_ok"] = int(km <= 1.5 and p.get("current-1m-u") is not None)
+                      # Vandstand kan mangle i strømcellen (fx Svaneknoppen) -> nærmeste celle med vandstand
+                      cs = min(valid_smd, key=lambda c: dist(c, lo, la)) if valid_smd else None
+                      byc = {q["step"]: q for q in valid[c]}
+                      bys = {q["step"]: q for q in valid_smd[cs]} if cs else {}
+                      p = byc.get(probe, {})
+                      ps_ = bys.get(probe, {})
+                      row[k + "_ok"] = int(km <= 1.5 and ok(p.get("current-1m-u")))
                       row[k + "_km"] = round(km, 2)
                       row[k + "_u"] = p.get("current-1m-u", "")
                       row[k + "_v"] = p.get("current-1m-v", "")
-                      row[k + "_smd"] = p.get("sea-mean-deviation", "")
+                      row[k + "_smd"] = ps_.get("sea-mean-deviation", "")
+                      if not row[k + "_ok"]:
+                          continue
+                      # Hele tidsserien i samme GeoJSON-form som data/<navn>-current.json
+                      feats_out = []
+                      for st in steps:
+                          a, b = byc.get(st, {}), bys.get(st, {})
+                          props = {"step": st,
+                                   "current-1m-u": a.get("current-1m-u"),
+                                   "current-1m-v": a.get("current-1m-v"),
+                                   "sea-mean-deviation": b.get("sea-mean-deviation")}
+                          feats_out.append({"type": "Feature",
+                                            "geometry": {"type": "Point", "coordinates": [lo, la]},
+                                            "properties": props})
+                      doc = {"type": "FeatureCollection", "source": "dkss_idw /cube (nærmeste celle)",
+                             "run_at": run_at, "cell_current": list(c), "cell_smd": list(cs) if cs else None,
+                             "cell_km": round(km, 2), "features": feats_out}
+                      with open("data/cube-test/%s-current.json" % outname[k], "w") as fh:
+                          json.dump(doc, fh, ensure_ascii=False)
+                      status["points"][outname[k]] = {"status": "ok", "run_at": run_at}
+                  status["run_at"] = run_at
+                  with open(status_path, "w") as fh:
+                      json.dump(status, fh, ensure_ascii=False, indent=1)
               except Exception as e:
                   row["result"] = "parse_error"
                   print("Parse-fejl:", e)
@@ -131,8 +174,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/cube-test/log.csv
-          git commit -q -m "cube-test log" || exit 0
+          git add data/cube-test/
+          git commit -q -m "cube-test log + tidsserier" || exit 0
           for i in 1 2 3 4; do
             git pull --rebase -q && git push -q && exit 0
             sleep $(( i * 5 ))
