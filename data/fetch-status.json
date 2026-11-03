@@ -1,10 +1,10 @@
 {
-  "run_at": "2026-11-03T03:52:47Z",
+  "run_at": "2026-11-03T09:32:35Z",
   "points": {
     "amager": {
       "label": "Amager Strand (DMI strøm/vandstand)",
-      "status": "ok",
-      "run_at": "2026-11-03T03:52:47Z"
+      "status": "failed",
+      "run_at": "2026-11-03T09:32:35Z"
     },
     "nordhavn": {
       "label": "Nordhavn/Sandkaj Badezone (DMI strøm/vandstand)",
@@ -24,7 +24,7 @@
     "amager_watertemp": {
       "label": "Amager Strand (live vandtemp, Kastrup Havn II)",
       "status": "ok",
-      "run_at": "2026-11-03T03:52:47Z"
+      "run_at": "2026-11-03T09:32:35Z"
     },
     "nordhavn_watertemp": {
       "label": "Nordhavn/Sandkaj/Kattegatvej/Svaneknoppen (live vandtemp, Københavns Havn II)",
